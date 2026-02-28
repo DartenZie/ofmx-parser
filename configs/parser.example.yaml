@@ -1,0 +1,9 @@
+# Reserved for future parser behavior switches.
+# Current CLI behavior is driven by --input and --output flags.
+
+parser:
+  strict_mode: true
+  timezone: "UTC"
+
+output:
+  pretty_print: true

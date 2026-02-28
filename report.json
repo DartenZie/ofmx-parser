@@ -1,0 +1,39 @@
+{
+  "snapshot_meta": {
+    "Version": "0.1",
+    "Origin": "ofmx editor v1.0.37",
+    "Namespace": "210444d1-4576-e92d-0983-4669182a8c04",
+    "Regions": "",
+    "Created": "2025-04-14T16:28:57Z",
+    "Effective": "2025-04-14T16:28:57Z",
+    "Expiration": ""
+  },
+  "total_features": 5041,
+  "feature_counts": {
+    "Abd": 301,
+    "Aga": 15,
+    "Aha": 727,
+    "Ahp": 209,
+    "Ahu": 209,
+    "Ase": 301,
+    "Dme": 11,
+    "Dpn": 114,
+    "Fdn": 1,
+    "Fqy": 248,
+    "Fto": 1,
+    "Ful": 149,
+    "Gbr": 29,
+    "Lbm": 11,
+    "Ndb": 7,
+    "Org": 1,
+    "Rdd": 1046,
+    "Rdn": 538,
+    "Rls": 34,
+    "Rwy": 269,
+    "Sae": 356,
+    "Ser": 227,
+    "Tcn": 1,
+    "Uni": 227,
+    "Vor": 9
+  }
+}

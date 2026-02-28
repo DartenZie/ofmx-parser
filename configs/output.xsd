@@ -1,0 +1,244 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema
+    xmlns:xs="http://www.w3.org/2001/XMLSchema"
+    elementFormDefault="qualified"
+    attributeFormDefault="unqualified">
+
+    <xs:simpleType name="LatitudeType">
+        <xs:restriction base="xs:decimal">
+            <xs:minInclusive value="-90"/>
+            <xs:maxInclusive value="90"/>
+        </xs:restriction>
+    </xs:simpleType>
+
+    <xs:simpleType name="LongitudeType">
+        <xs:restriction base="xs:decimal">
+            <xs:minInclusive value="-180"/>
+            <xs:maxInclusive value="180"/>
+        </xs:restriction>
+    </xs:simpleType>
+
+    <xs:simpleType name="BearingType">
+        <xs:restriction base="xs:decimal">
+            <xs:minInclusive value="0"/>
+            <xs:maxInclusive value="360"/>
+        </xs:restriction>
+    </xs:simpleType>
+
+    <xs:simpleType name="PositiveDecimalType">
+        <xs:restriction base="xs:decimal">
+            <xs:minInclusive value="0"/>
+        </xs:restriction>
+    </xs:simpleType>
+
+    <xs:simpleType name="NonEmptyStringType">
+        <xs:restriction base="xs:string">
+            <xs:minLength value="1"/>
+        </xs:restriction>
+    </xs:simpleType>
+
+    <xs:simpleType name="RadioTypeEnum">
+        <xs:restriction base="xs:string">
+            <xs:enumeration value="COM"/>
+            <xs:enumeration value="TWR"/>
+        </xs:restriction>
+    </xs:simpleType>
+
+    <xs:simpleType name="FreqUnitEnum">
+        <xs:restriction base="xs:string">
+            <xs:enumeration value="MHZ"/>
+            <xs:enumeration value="KHZ"/>
+            <xs:enumeration value="GHZ"/>
+        </xs:restriction>
+    </xs:simpleType>
+
+    <xs:simpleType name="NavaidTypeEnum">
+        <xs:restriction base="xs:string">
+            <xs:enumeration value="VOR"/>
+            <xs:enumeration value="NDB"/>
+            <xs:enumeration value="DME"/>
+            <xs:enumeration value="DESIGNATED"/>
+            <xs:enumeration value="MARKER"/>
+            <xs:enumeration value="TACAN"/>
+            <xs:enumeration value="UNKNOWN"/>
+        </xs:restriction>
+    </xs:simpleType>
+
+    <xs:simpleType name="HeightRefEnum">
+        <xs:restriction base="xs:string">
+            <xs:enumeration value="AGL"/>
+            <xs:enumeration value="MSL"/>
+            <xs:enumeration value="FL"/>
+            <xs:enumeration value="UNL"/>
+            <xs:enumeration value="STD"/>
+        </xs:restriction>
+    </xs:simpleType>
+
+    <xs:simpleType name="RunwayDirectionCodeEnum">
+        <xs:restriction base="xs:string">
+            <xs:enumeration value="N"/>
+            <xs:enumeration value="NNE"/>
+            <xs:enumeration value="NE"/>
+            <xs:enumeration value="ENE"/>
+            <xs:enumeration value="E"/>
+            <xs:enumeration value="ESE"/>
+            <xs:enumeration value="SE"/>
+            <xs:enumeration value="SSE"/>
+            <xs:enumeration value="S"/>
+            <xs:enumeration value="SSW"/>
+            <xs:enumeration value="SW"/>
+            <xs:enumeration value="WSW"/>
+            <xs:enumeration value="W"/>
+            <xs:enumeration value="WNW"/>
+            <xs:enumeration value="NW"/>
+            <xs:enumeration value="NNW"/>
+        </xs:restriction>
+    </xs:simpleType>
+
+    <xs:complexType name="RadioType">
+        <xs:attribute name="t" type="RadioTypeEnum" use="required"/>
+        <xs:attribute name="f" type="PositiveDecimalType" use="required"/>
+        <xs:attribute name="u" type="FreqUnitEnum" use="required"/>
+        <xs:attribute name="c" type="xs:string" use="optional"/>
+        <xs:attribute name="l" type="xs:string" use="optional"/>
+    </xs:complexType>
+
+    <xs:complexType name="RunwayDirectionType">
+        <xs:attribute name="brg" type="BearingType" use="required"/>
+        <xs:attribute name="code" type="RunwayDirectionCodeEnum" use="required"/>
+    </xs:complexType>
+
+    <xs:complexType name="RunwayType">
+        <xs:sequence>
+            <xs:element name="Dir" type="RunwayDirectionType" minOccurs="1" maxOccurs="unbounded"/>
+        </xs:sequence>
+        <xs:attribute name="n" type="NonEmptyStringType" use="required"/>
+        <xs:attribute name="lenM" type="PositiveDecimalType" use="required"/>
+        <xs:attribute name="widM" type="PositiveDecimalType" use="required"/>
+        <xs:attribute name="comp" type="xs:string" use="optional"/>
+        <xs:attribute name="prep" type="xs:string" use="optional"/>
+    </xs:complexType>
+
+    <xs:complexType name="AirportType">
+        <xs:sequence>
+            <xs:element name="Radios" minOccurs="0">
+                <xs:complexType>
+                    <xs:sequence>
+                        <xs:element name="Radio" type="RadioType" minOccurs="0" maxOccurs="unbounded"/>
+                    </xs:sequence>
+                </xs:complexType>
+            </xs:element>
+            <xs:element name="Runways" minOccurs="0">
+                <xs:complexType>
+                    <xs:sequence>
+                        <xs:element name="Runway" type="RunwayType" minOccurs="0" maxOccurs="unbounded"/>
+                    </xs:sequence>
+                </xs:complexType>
+            </xs:element>
+        </xs:sequence>
+        <xs:attribute name="id" type="NonEmptyStringType" use="required"/>
+        <xs:attribute name="d" type="NonEmptyStringType" use="required"/>
+        <xs:attribute name="n" type="NonEmptyStringType" use="required"/>
+        <xs:attribute name="lat" type="LatitudeType" use="required"/>
+        <xs:attribute name="lon" type="LongitudeType" use="required"/>
+        <xs:attribute name="elevM" type="xs:decimal" use="required"/>
+    </xs:complexType>
+
+    <xs:complexType name="NavaidType">
+        <xs:attribute name="id" type="NonEmptyStringType" use="required"/>
+        <xs:attribute name="t" type="NavaidTypeEnum" use="required"/>
+        <xs:attribute name="d" type="NonEmptyStringType" use="required"/>
+        <xs:attribute name="n" type="NonEmptyStringType" use="required"/>
+        <xs:attribute name="lat" type="LatitudeType" use="required"/>
+        <xs:attribute name="lon" type="LongitudeType" use="required"/>
+    </xs:complexType>
+
+    <xs:complexType name="PointType">
+        <xs:attribute name="lat" type="LatitudeType" use="required"/>
+        <xs:attribute name="lon" type="LongitudeType" use="required"/>
+    </xs:complexType>
+
+    <xs:complexType name="BoundingBoxType">
+        <xs:attribute name="minLat" type="LatitudeType" use="required"/>
+        <xs:attribute name="minLon" type="LongitudeType" use="required"/>
+        <xs:attribute name="maxLat" type="LatitudeType" use="required"/>
+        <xs:attribute name="maxLon" type="LongitudeType" use="required"/>
+    </xs:complexType>
+
+    <xs:complexType name="AirspaceType">
+        <xs:sequence>
+            <xs:element name="Poly">
+                <xs:complexType>
+                    <xs:sequence>
+                        <xs:element name="P" type="PointType" minOccurs="3" maxOccurs="unbounded"/>
+                    </xs:sequence>
+                </xs:complexType>
+            </xs:element>
+            <xs:element name="BBox" type="BoundingBoxType"/>
+        </xs:sequence>
+        <xs:attribute name="id" type="NonEmptyStringType" use="required"/>
+        <xs:attribute name="d" type="NonEmptyStringType" use="required"/>
+        <xs:attribute name="n" type="NonEmptyStringType" use="required"/>
+        <xs:attribute name="t" type="NonEmptyStringType" use="required"/>
+        <xs:attribute name="lowM" type="xs:decimal" use="required"/>
+        <xs:attribute name="lowRef" type="HeightRefEnum" use="required"/>
+        <xs:attribute name="upM" type="xs:decimal" use="required"/>
+        <xs:attribute name="upRef" type="HeightRefEnum" use="required"/>
+        <xs:attribute name="rmk" type="xs:string" use="optional"/>
+    </xs:complexType>
+
+    <xs:complexType name="ObstacleType">
+        <xs:attribute name="id" type="NonEmptyStringType" use="required"/>
+        <xs:attribute name="t" type="NonEmptyStringType" use="required"/>
+        <xs:attribute name="n" type="NonEmptyStringType" use="required"/>
+        <xs:attribute name="lat" type="LatitudeType" use="required"/>
+        <xs:attribute name="lon" type="LongitudeType" use="required"/>
+        <xs:attribute name="hM" type="PositiveDecimalType" use="required"/>
+        <xs:attribute name="elevM" type="xs:decimal" use="required"/>
+    </xs:complexType>
+
+    <xs:element name="NavSnapshot">
+        <xs:complexType>
+            <xs:sequence>
+                <xs:element name="Airports" minOccurs="0">
+                    <xs:complexType>
+                        <xs:sequence>
+                            <xs:element name="Airport" type="AirportType" minOccurs="0" maxOccurs="unbounded"/>
+                        </xs:sequence>
+                    </xs:complexType>
+                </xs:element>
+
+                <xs:element name="Navaids" minOccurs="0">
+                    <xs:complexType>
+                        <xs:sequence>
+                            <xs:element name="Navaid" type="NavaidType" minOccurs="0" maxOccurs="unbounded"/>
+                        </xs:sequence>
+                    </xs:complexType>
+                </xs:element>
+
+                <xs:element name="Airspaces" minOccurs="0">
+                    <xs:complexType>
+                        <xs:sequence>
+                            <xs:element name="Airspace" type="AirspaceType" minOccurs="0" maxOccurs="unbounded"/>
+                        </xs:sequence>
+                    </xs:complexType>
+                </xs:element>
+
+                <xs:element name="Obstacles" minOccurs="0">
+                    <xs:complexType>
+                        <xs:sequence>
+                            <xs:element name="Obstacle" type="ObstacleType" minOccurs="0" maxOccurs="unbounded"/>
+                        </xs:sequence>
+                    </xs:complexType>
+                </xs:element>
+            </xs:sequence>
+
+            <xs:attribute name="cycle" type="NonEmptyStringType" use="required"/>
+            <xs:attribute name="region" type="NonEmptyStringType" use="required"/>
+            <xs:attribute name="generatedAt" type="xs:dateTime" use="required"/>
+            <xs:attribute name="schema" type="NonEmptyStringType" use="required"/>
+            <xs:attribute name="source" type="xs:string" use="optional"/>
+        </xs:complexType>
+    </xs:element>
+
+</xs:schema>
