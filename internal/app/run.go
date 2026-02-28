@@ -7,6 +7,7 @@ import (
 	"context"
 
 	"github.com/DartenZie/ofmx-parser/internal/config"
+	"github.com/DartenZie/ofmx-parser/internal/domain"
 	"github.com/DartenZie/ofmx-parser/internal/ingest"
 	"github.com/DartenZie/ofmx-parser/internal/output"
 	"github.com/DartenZie/ofmx-parser/internal/pipeline"
@@ -26,19 +27,46 @@ func Run(ctx context.Context, args []string) error {
 		}
 	}
 
-	runner := pipeline.New(
-		ingest.FileReader{},
-		transform.DefaultMapper{},
-		output.XMLFileWriter{},
-	)
+	if cfg.OutputPath != "" {
+		runner := pipeline.New(
+			ingest.FileReader{},
+			transform.DefaultMapper{},
+			output.XMLFileWriter{},
+		)
 
-	result, err := runner.Execute(ctx, cfg.InputPath, cfg.OutputPath)
-	if err != nil {
-		return err
+		result, err := runner.Execute(ctx, cfg.InputPath, cfg.OutputPath)
+		if err != nil {
+			return err
+		}
+
+		if cfg.ReportPath != "" {
+			if err := (output.JSONReportWriter{}).Write(ctx, result.Report, cfg.ReportPath); err != nil {
+				return err
+			}
+		}
 	}
 
-	if cfg.ReportPath != "" {
-		if err := (output.JSONReportWriter{}).Write(ctx, result.Report, cfg.ReportPath); err != nil {
+	if cfg.PMTilesOutputPath != "" {
+		doc, err := ingest.FileReader{}.Read(ctx, cfg.InputPath)
+		if err != nil {
+			return err
+		}
+
+		mapReq := domain.MapExportRequest{
+			PBFInputPath:      cfg.PBFInputPath,
+			PMTilesOutputPath: cfg.PMTilesOutputPath,
+			TilemakerBin:      cfg.TilemakerBin,
+			TilemakerConfig:   cfg.TilemakerConfig,
+			TilemakerProcess:  cfg.TilemakerProcess,
+			TempDir:           cfg.MapTempDir,
+		}
+
+		mapSvc := pipeline.NewMapService(
+			transform.DefaultMapMapper{},
+			output.GeoJSONFileWriter{},
+			output.ExecTilemakerRunner{},
+		)
+		if _, err := mapSvc.Execute(ctx, doc, mapReq); err != nil {
 			return err
 		}
 	}

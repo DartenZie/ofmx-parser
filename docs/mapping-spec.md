@@ -25,8 +25,14 @@ This document defines how OFMX data maps to the custom XML output model (`NavSna
 
 Coordinate rule for `geoLat` / `geoLong`:
 
-- Parse OFMX DMS strings (e.g. `500602N`, `0141544E`) into decimal degrees.
+- Primary format: parse OFMX schema-compliant decimal coordinates with hemisphere suffix
+  (e.g. `49.123456N`, `014.123456E`).
+- Compatibility fallback: parse legacy DMS-like compact format
+  (e.g. `500602N`, `0141544E`).
 - Apply negative sign for `S` and `W` hemispheres.
+- Enforce coordinate bounds in ingest:
+  - latitude `[-90, 90]`
+  - longitude `[-180, 180]`
 
 ## Runway Mapping (M2)
 
@@ -113,3 +119,17 @@ Height reference mapping (`codeDistVer*` -> `HeightRefEnum`):
 Obstacle ordering:
 
 - Obstacles sorted by `@id`.
+
+## Map Export Mapping (M5)
+
+Map export mapping (`OFMX -> map dataset -> GeoJSON -> PMTiles`) is specified in:
+
+- `docs/map-spec.md` (normative layer contract)
+- `docs/map-pipeline-design.md` (runtime and CLI contract)
+
+Implemented map dataset entities:
+
+- airports point layer,
+- zones polygon layer,
+- points-of-interest point layer (navaids, designated points, obstacles),
+- deduplicated airspace border line layer.
