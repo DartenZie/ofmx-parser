@@ -27,9 +27,11 @@ func Run(ctx context.Context, args []string) error {
 		}
 	}
 
+	reader := ingest.FileReader{ArcMaxChordLengthMeters: cfg.ArcMaxChordM}
+
 	if cfg.OutputPath != "" {
 		runner := pipeline.New(
-			ingest.FileReader{},
+			reader,
 			transform.DefaultMapper{},
 			output.XMLFileWriter{},
 		)
@@ -47,7 +49,7 @@ func Run(ctx context.Context, args []string) error {
 	}
 
 	if cfg.PMTilesOutputPath != "" {
-		doc, err := ingest.FileReader{}.Read(ctx, cfg.InputPath)
+		doc, err := reader.Read(ctx, cfg.InputPath)
 		if err != nil {
 			return err
 		}

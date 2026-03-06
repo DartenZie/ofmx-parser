@@ -17,6 +17,7 @@ type CLIConfig struct {
 	OutputPath        string
 	ConfigPath        string
 	ReportPath        string
+	ArcMaxChordM      float64
 	PBFInputPath      string
 	PMTilesOutputPath string
 	TilemakerBin      string
@@ -34,6 +35,7 @@ func ParseArgs(args []string) (CLIConfig, error) {
 	output := fs.String("output", "", "Path to output XML file")
 	configPath := fs.String("config", "", "Path to optional config file")
 	reportPath := fs.String("report", "", "Path to optional parse report JSON output")
+	arcMaxChord := fs.Float64("arc-max-chord-m", 750, "Maximum arc chord length in meters used when densifying OFMX arc/circle borders")
 	pbfInput := fs.String("pbf-input", "", "Path to OSM PBF input for PMTiles generation")
 	pmtilesOutput := fs.String("pmtiles-output", "", "Path to output PMTiles file")
 	tilemakerBin := fs.String("tilemaker-bin", "tilemaker", "Tilemaker executable path/name")
@@ -50,6 +52,7 @@ func ParseArgs(args []string) (CLIConfig, error) {
 		OutputPath:        *output,
 		ConfigPath:        *configPath,
 		ReportPath:        *reportPath,
+		ArcMaxChordM:      *arcMaxChord,
 		PBFInputPath:      *pbfInput,
 		PMTilesOutputPath: *pmtilesOutput,
 		TilemakerBin:      *tilemakerBin,
@@ -73,6 +76,10 @@ func (c CLIConfig) Validate() error {
 
 	if c.OutputPath == "" && c.PMTilesOutputPath == "" {
 		return domain.NewError(domain.ErrConfig, "at least one output is required: --output or --pmtiles-output", nil)
+	}
+
+	if c.ArcMaxChordM <= 0 {
+		return domain.NewError(domain.ErrConfig, "--arc-max-chord-m must be > 0", nil)
 	}
 
 	mapRequested := c.PBFInputPath != "" || c.PMTilesOutputPath != "" || c.TilemakerConfig != "" || c.TilemakerProcess != "" || c.MapTempDir != ""

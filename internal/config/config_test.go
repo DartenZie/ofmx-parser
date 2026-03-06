@@ -35,3 +35,16 @@ func TestParseArgsRejectsWhenNoOutputRequested(t *testing.T) {
 		t.Fatal("expected error when no --output or --pmtiles-output provided")
 	}
 }
+
+func TestParseArgsRejectsNonPositiveArcChord(t *testing.T) {
+	t.Parallel()
+
+	_, err := ParseArgs([]string{
+		"--input", "input.ofmx",
+		"--output", "out.xml",
+		"--arc-max-chord-m", "0",
+	})
+	if err == nil {
+		t.Fatal("expected error for non-positive --arc-max-chord-m")
+	}
+}

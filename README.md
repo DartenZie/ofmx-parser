@@ -114,6 +114,7 @@ The config file is available in the project structure for future parser/mapping 
 
 Map-related flags:
 
+- `--arc-max-chord-m`: maximum chord length (meters) for OFMX arc/circle densification (default: `750`)
 - `--pbf-input`: OSM PBF input path for tilemaker
 - `--pmtiles-output`: PMTiles output path
 - `--tilemaker-bin`: tilemaker binary path/name (default: `tilemaker`)

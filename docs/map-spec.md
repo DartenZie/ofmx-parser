@@ -106,6 +106,7 @@ The following style-targeted layers are required.
 
 - geometry: Polygon
 - source: OFMX airspace features + border geometry
+- curved OFMX borders (`CWA`/`CCA` arcs and `Circle`) are exported as deterministic densified polygon rings
 - mandatory attributes:
   - `id` (string)
   - `name` (string)

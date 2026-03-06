@@ -94,6 +94,23 @@ Horizontal geometry:
 
 - `Abd` records are joined to `Ase` via `Abd/AbdUid/AseUid/codeId`.
 - `Abd/Avx/geoLat` + `Abd/Avx/geoLong` -> `Airspace/Poly/P` points.
+- `Abd/Avx/codeType` determines segment geometry from vertex `i` to `i+1` in the closed ring.
+  - `GRC`/`RHL`/`ABE` are treated as straight segments between vertices.
+  - `CWA` (clockwise arc) and `CCA` (counter-clockwise arc) are densified into intermediate points using
+    `geoLatArc`/`geoLongArc` as arc center.
+  - Arc densification uses deterministic chord-based sampling with default `750 m` max chord length;
+    CLI override: `--arc-max-chord-m`.
+  - When provided, `valRadiusArc` + `uomRadiusArc` are used as arc radius (`NM`, `KM`, `M`, `FT`),
+    otherwise radius is derived from center->start vertex distance.
+- `Abd/Circle` is supported and expanded into a deterministic polygon ring using
+  `geoLatCen`/`geoLongCen` + `valRadius`/`uomRadius`.
+- `Abd/Avx/codeType=FNT` is treated as a frontier placeholder and resolved against `Gbr` geometry.
+  - Border resolution key priority: `Avx/GbrUid/@mid`, fallback `Avx/GbrUid/txtName`.
+  - `Gbr/Gbv` points are indexed once per dataset (`codeDatum=WGE`) and inserted into airspace borders.
+  - Inserted border direction is chosen to continue from the previous vertex toward the next vertex.
+  - If anchors are within snap tolerance, only the border subpath between the nearest points is used.
+  - Consecutive duplicate coordinates are removed using coordinate epsilon.
+  - Missing `Gbr` emits a structured warning and falls back to the original frontier coordinate.
 - Duplicate points are removed.
 - `BBox` is computed from polygon min/max coordinates.
 - Airspaces with fewer than 3 unique points are omitted from output.

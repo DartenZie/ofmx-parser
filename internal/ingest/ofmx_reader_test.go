@@ -2,8 +2,11 @@ package ingest
 
 import (
 	"context"
+	"fmt"
+	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -166,5 +169,283 @@ func TestParseCoordinateRejectsOutOfRange(t *testing.T) {
 
 	if _, err := parseCoordinate("991234N", true); err == nil {
 		t.Fatal("expected out-of-range latitude error")
+	}
+}
+
+func TestFileReaderReadExpandsFrontierSegmentFromGbr(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	inputPath := filepath.Join(tmpDir, "snapshot_frontier_expand.ofmx")
+
+	input := `<?xml version="1.0" encoding="UTF-8"?>
+<OFMX-Snapshot version="0.1.0" origin="unit-test" namespace="123e4567-e89b-12d3-a456-426614174000" created="2026-01-01T00:00:00Z" effective="2026-01-01T00:00:00Z">
+  <Ase>
+    <AseUid><codeType>R</codeType><codeId>LKFNT1</codeId></AseUid>
+    <txtName>Frontier Zone</txtName>
+  </Ase>
+  <Abd>
+    <AbdUid><AseUid><codeType>R</codeType><codeId>LKFNT1</codeId></AseUid></AbdUid>
+    <Avx><codeType>GRC</codeType><geoLat>50.000000N</geoLat><geoLong>014.000000E</geoLong><codeDatum>WGE</codeDatum></Avx>
+    <Avx>
+      <GbrUid mid="BORDER-1"><txtName>TEST_BORDER</txtName></GbrUid>
+      <codeType>FNT</codeType>
+      <geoLat>49.900000N</geoLat>
+      <geoLong>014.200000E</geoLong>
+      <codeDatum>WGE</codeDatum>
+    </Avx>
+    <Avx><codeType>GRC</codeType><geoLat>49.800000N</geoLat><geoLong>014.400000E</geoLong><codeDatum>WGE</codeDatum></Avx>
+    <Avx><codeType>GRC</codeType><geoLat>50.000000N</geoLat><geoLong>014.000000E</geoLong><codeDatum>WGE</codeDatum></Avx>
+  </Abd>
+  <Gbr>
+    <GbrUid mid="BORDER-1"><txtName>TEST_BORDER</txtName></GbrUid>
+    <codeType />
+    <Gbv><codeType>GRC</codeType><geoLat>50.200000N</geoLat><geoLong>013.800000E</geoLong><codeDatum>WGE</codeDatum></Gbv>
+    <Gbv><codeType>GRC</codeType><geoLat>50.000000N</geoLat><geoLong>014.000000E</geoLong><codeDatum>WGE</codeDatum></Gbv>
+    <Gbv><codeType>GRC</codeType><geoLat>49.900000N</geoLat><geoLong>014.200000E</geoLong><codeDatum>WGE</codeDatum></Gbv>
+    <Gbv><codeType>GRC</codeType><geoLat>49.800000N</geoLat><geoLong>014.400000E</geoLong><codeDatum>WGE</codeDatum></Gbv>
+    <Gbv><codeType>GRC</codeType><geoLat>49.700000N</geoLat><geoLong>014.600000E</geoLong><codeDatum>WGE</codeDatum></Gbv>
+  </Gbr>
+</OFMX-Snapshot>`
+
+	if err := os.WriteFile(inputPath, []byte(input), 0o600); err != nil {
+		t.Fatalf("write input: %v", err)
+	}
+
+	doc, err := FileReader{}.Read(context.Background(), inputPath)
+	if err != nil {
+		t.Fatalf("reader.Read failed: %v", err)
+	}
+
+	if len(doc.AirspaceBorders) != 1 {
+		t.Fatalf("expected one airspace border, got %d", len(doc.AirspaceBorders))
+	}
+
+	pts := doc.AirspaceBorders[0].Points
+	if len(pts) < 4 {
+		t.Fatalf("expected expanded border with >=4 points, got %d", len(pts))
+	}
+
+	containsIntermediate := false
+	for _, p := range pts {
+		if p.Lat == 49.9 && p.Lon == 14.2 {
+			containsIntermediate = true
+			break
+		}
+	}
+	if !containsIntermediate {
+		t.Fatalf("expected expanded frontier polyline point (49.9, 14.2), got %+v", pts)
+	}
+
+	if pts[0].Lat != pts[len(pts)-1].Lat || pts[0].Lon != pts[len(pts)-1].Lon {
+		t.Fatalf("expected closed ring after expansion, first=%+v last=%+v", pts[0], pts[len(pts)-1])
+	}
+}
+
+func TestFileReaderReadMissingFrontierGbrWarnsAndContinues(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	inputPath := filepath.Join(tmpDir, "snapshot_frontier_missing_gbr.ofmx")
+
+	input := `<?xml version="1.0" encoding="UTF-8"?>
+<OFMX-Snapshot version="0.1.0" origin="unit-test" namespace="123e4567-e89b-12d3-a456-426614174000" created="2026-01-01T00:00:00Z" effective="2026-01-01T00:00:00Z">
+  <Ase>
+    <AseUid><codeType>R</codeType><codeId>LKFNT2</codeId></AseUid>
+    <txtName>Missing Border Zone</txtName>
+  </Ase>
+  <Abd>
+    <AbdUid><AseUid><codeType>R</codeType><codeId>LKFNT2</codeId></AseUid></AbdUid>
+    <Avx><codeType>GRC</codeType><geoLat>49.000000N</geoLat><geoLong>014.000000E</geoLong><codeDatum>WGE</codeDatum></Avx>
+    <Avx>
+      <GbrUid mid="MISSING-BORDER"><txtName>MISSING_BORDER</txtName></GbrUid>
+      <codeType>FNT</codeType>
+      <geoLat>49.100000N</geoLat>
+      <geoLong>014.200000E</geoLong>
+      <codeDatum>WGE</codeDatum>
+    </Avx>
+    <Avx><codeType>GRC</codeType><geoLat>48.900000N</geoLat><geoLong>014.300000E</geoLong><codeDatum>WGE</codeDatum></Avx>
+  </Abd>
+</OFMX-Snapshot>`
+
+	if err := os.WriteFile(inputPath, []byte(input), 0o600); err != nil {
+		t.Fatalf("write input: %v", err)
+	}
+
+	warnings := make([]string, 0, 1)
+	reader := FileReader{
+		Warningf: func(format string, args ...any) {
+			warnings = append(warnings, fmt.Sprintf(format, args...))
+		},
+	}
+
+	doc, err := reader.Read(context.Background(), inputPath)
+	if err != nil {
+		t.Fatalf("reader.Read failed: %v", err)
+	}
+
+	if len(doc.AirspaceBorders) != 1 || len(doc.AirspaceBorders[0].Points) < 3 {
+		t.Fatalf("expected fallback border points, got %+v", doc.AirspaceBorders)
+	}
+
+	if len(warnings) == 0 {
+		t.Fatal("expected missing border warning")
+	}
+	if !strings.Contains(warnings[0], "missing_border_uid=\"MISSING-BORDER\"") {
+		t.Fatalf("expected warning to include missing border UID, got %q", warnings[0])
+	}
+}
+
+func TestFileReaderReadExpandsClockwiseArcVertices(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	inputPath := filepath.Join(tmpDir, "snapshot_arc_expand.ofmx")
+
+	input := `<?xml version="1.0" encoding="UTF-8"?>
+<OFMX-Snapshot version="0.1.0" origin="unit-test" namespace="123e4567-e89b-12d3-a456-426614174000" created="2026-01-01T00:00:00Z" effective="2026-01-01T00:00:00Z">
+  <Ase>
+    <AseUid><codeType>R</codeType><codeId>LKARC1</codeId></AseUid>
+    <txtName>Arc Zone</txtName>
+  </Ase>
+  <Abd>
+    <AbdUid><AseUid><codeType>R</codeType><codeId>LKARC1</codeId></AseUid></AbdUid>
+    <Avx>
+      <codeType>CWA</codeType>
+      <geoLat>50.100000N</geoLat>
+      <geoLong>014.000000E</geoLong>
+      <codeDatum>WGE</codeDatum>
+      <geoLatArc>50.000000N</geoLatArc>
+      <geoLongArc>014.000000E</geoLongArc>
+    </Avx>
+    <Avx><codeType>GRC</codeType><geoLat>50.000000N</geoLat><geoLong>014.100000E</geoLong><codeDatum>WGE</codeDatum></Avx>
+    <Avx><codeType>GRC</codeType><geoLat>49.900000N</geoLat><geoLong>014.000000E</geoLong><codeDatum>WGE</codeDatum></Avx>
+    <Avx><codeType>GRC</codeType><geoLat>50.100000N</geoLat><geoLong>014.000000E</geoLong><codeDatum>WGE</codeDatum></Avx>
+  </Abd>
+</OFMX-Snapshot>`
+
+	if err := os.WriteFile(inputPath, []byte(input), 0o600); err != nil {
+		t.Fatalf("write input: %v", err)
+	}
+
+	doc, err := FileReader{}.Read(context.Background(), inputPath)
+	if err != nil {
+		t.Fatalf("reader.Read failed: %v", err)
+	}
+
+	if len(doc.AirspaceBorders) != 1 {
+		t.Fatalf("expected one border, got %d", len(doc.AirspaceBorders))
+	}
+
+	pts := doc.AirspaceBorders[0].Points
+	if len(pts) <= 4 {
+		t.Fatalf("expected arc densification to add points, got %d", len(pts))
+	}
+
+	midFound := false
+	for _, p := range pts {
+		if p.Lat > 50.02 && p.Lat < 50.09 && p.Lon > 14.02 && p.Lon < 14.09 {
+			midFound = true
+			break
+		}
+	}
+	if !midFound {
+		t.Fatalf("expected intermediate arc points between start and end, got %+v", pts)
+	}
+}
+
+func TestFileReaderReadArcMaxChordControlsPointCount(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	inputPath := filepath.Join(tmpDir, "snapshot_arc_chord.ofmx")
+
+	input := `<?xml version="1.0" encoding="UTF-8"?>
+<OFMX-Snapshot version="0.1.0" origin="unit-test" namespace="123e4567-e89b-12d3-a456-426614174000" created="2026-01-01T00:00:00Z" effective="2026-01-01T00:00:00Z">
+  <Ase>
+    <AseUid><codeType>R</codeType><codeId>LKARC2</codeId></AseUid>
+    <txtName>Arc Chord Zone</txtName>
+  </Ase>
+  <Abd>
+    <AbdUid><AseUid><codeType>R</codeType><codeId>LKARC2</codeId></AseUid></AbdUid>
+    <Avx>
+      <codeType>CWA</codeType>
+      <geoLat>50.100000N</geoLat>
+      <geoLong>014.000000E</geoLong>
+      <codeDatum>WGE</codeDatum>
+      <geoLatArc>50.000000N</geoLatArc>
+      <geoLongArc>014.000000E</geoLongArc>
+    </Avx>
+    <Avx><codeType>CWA</codeType><geoLat>50.000000N</geoLat><geoLong>014.100000E</geoLong><codeDatum>WGE</codeDatum><geoLatArc>50.000000N</geoLatArc><geoLongArc>014.000000E</geoLongArc></Avx>
+    <Avx><codeType>CWA</codeType><geoLat>49.900000N</geoLat><geoLong>014.000000E</geoLong><codeDatum>WGE</codeDatum><geoLatArc>50.000000N</geoLatArc><geoLongArc>014.000000E</geoLongArc></Avx>
+    <Avx><codeType>CWA</codeType><geoLat>50.000000N</geoLat><geoLong>013.900000E</geoLong><codeDatum>WGE</codeDatum><geoLatArc>50.000000N</geoLatArc><geoLongArc>014.000000E</geoLongArc></Avx>
+  </Abd>
+</OFMX-Snapshot>`
+
+	if err := os.WriteFile(inputPath, []byte(input), 0o600); err != nil {
+		t.Fatalf("write input: %v", err)
+	}
+
+	dense, err := FileReader{ArcMaxChordLengthMeters: 300}.Read(context.Background(), inputPath)
+	if err != nil {
+		t.Fatalf("dense reader failed: %v", err)
+	}
+
+	sparse, err := FileReader{ArcMaxChordLengthMeters: 3000}.Read(context.Background(), inputPath)
+	if err != nil {
+		t.Fatalf("sparse reader failed: %v", err)
+	}
+
+	denseCount := len(dense.AirspaceBorders[0].Points)
+	sparseCount := len(sparse.AirspaceBorders[0].Points)
+	if denseCount <= sparseCount {
+		t.Fatalf("expected denser arc to produce more points: dense=%d sparse=%d", denseCount, sparseCount)
+	}
+}
+
+func TestFileReaderReadMapsCircleBorder(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	inputPath := filepath.Join(tmpDir, "snapshot_circle.ofmx")
+
+	input := `<?xml version="1.0" encoding="UTF-8"?>
+<OFMX-Snapshot version="0.1.0" origin="unit-test" namespace="123e4567-e89b-12d3-a456-426614174000" created="2026-01-01T00:00:00Z" effective="2026-01-01T00:00:00Z">
+  <Ase>
+    <AseUid><codeType>R</codeType><codeId>LKCIR1</codeId></AseUid>
+    <txtName>Circle Zone</txtName>
+  </Ase>
+  <Abd>
+    <AbdUid><AseUid><codeType>R</codeType><codeId>LKCIR1</codeId></AseUid></AbdUid>
+    <Circle>
+      <geoLatCen>50.000000N</geoLatCen>
+      <geoLongCen>014.000000E</geoLongCen>
+      <codeDatum>WGE</codeDatum>
+      <valRadius>2</valRadius>
+      <uomRadius>NM</uomRadius>
+    </Circle>
+  </Abd>
+</OFMX-Snapshot>`
+
+	if err := os.WriteFile(inputPath, []byte(input), 0o600); err != nil {
+		t.Fatalf("write input: %v", err)
+	}
+
+	doc, err := FileReader{}.Read(context.Background(), inputPath)
+	if err != nil {
+		t.Fatalf("reader.Read failed: %v", err)
+	}
+
+	if len(doc.AirspaceBorders) != 1 {
+		t.Fatalf("expected one border, got %d", len(doc.AirspaceBorders))
+	}
+
+	pts := doc.AirspaceBorders[0].Points
+	if len(pts) < 9 {
+		t.Fatalf("expected circle to be densified to at least 9 points, got %d", len(pts))
+	}
+
+	if math.Abs(pts[0].Lat-pts[len(pts)-1].Lat) > 1e-7 || math.Abs(pts[0].Lon-pts[len(pts)-1].Lon) > 1e-7 {
+		t.Fatalf("expected closed circle ring, first=%+v last=%+v", pts[0], pts[len(pts)-1])
 	}
 }

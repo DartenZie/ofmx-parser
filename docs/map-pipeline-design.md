@@ -39,6 +39,7 @@ Map mode uses these flags:
 
 - `--pbf-input <path>`: OSM PBF input for tilemaker.
 - `--pmtiles-output <path>`: target PMTiles output path.
+- `--arc-max-chord-m <meters>`: optional arc/circle densification chord limit (default `750`).
 - `--tilemaker-bin <path-or-name>`: tilemaker executable (default `tilemaker`).
 - `--tilemaker-config <path>`: optional custom config override.
 - `--tilemaker-process <path>`: optional custom process.lua override.
