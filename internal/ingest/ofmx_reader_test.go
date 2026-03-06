@@ -136,6 +136,49 @@ func TestFileReaderReadParsesAirspaceAndObstacle(t *testing.T) {
 	}
 }
 
+func TestFileReaderReadAirspaceUsesUOMDistWhenCodeDistMissing(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	inputPath := filepath.Join(tmpDir, "snapshot_airspace_uom_ref.ofmx")
+
+	input := `<?xml version="1.0" encoding="UTF-8"?>
+<OFMX-Snapshot version="0.1.0" origin="unit-test" namespace="123e4567-e89b-12d3-a456-426614174000" created="2026-01-01T00:00:00Z" effective="2026-01-01T00:00:00Z">
+  <Ase>
+    <AseUid><codeType>TMA</codeType><codeId>LKTMAUOM</codeId></AseUid>
+    <txtName>TMA UOM</txtName>
+    <valDistVerLower>100</valDistVerLower>
+    <uomDistVerLower>FL</uomDistVerLower>
+    <valDistVerUpper>145</valDistVerUpper>
+    <uomDistVerUpper>FL</uomDistVerUpper>
+  </Ase>
+  <Abd>
+    <AbdUid><AseUid><codeType>TMA</codeType><codeId>LKTMAUOM</codeId></AseUid></AbdUid>
+    <Avx><codeType>GRC</codeType><geoLat>49.000000N</geoLat><geoLong>014.000000E</geoLong><codeDatum>WGE</codeDatum></Avx>
+    <Avx><codeType>GRC</codeType><geoLat>49.100000N</geoLat><geoLong>014.200000E</geoLong><codeDatum>WGE</codeDatum></Avx>
+    <Avx><codeType>GRC</codeType><geoLat>48.900000N</geoLat><geoLong>014.300000E</geoLong><codeDatum>WGE</codeDatum></Avx>
+  </Abd>
+</OFMX-Snapshot>`
+
+	if err := os.WriteFile(inputPath, []byte(input), 0o600); err != nil {
+		t.Fatalf("write input: %v", err)
+	}
+
+	doc, err := FileReader{}.Read(context.Background(), inputPath)
+	if err != nil {
+		t.Fatalf("reader.Read failed: %v", err)
+	}
+
+	if len(doc.Airspaces) != 1 {
+		t.Fatalf("expected one parsed airspace, got %+v", doc.Airspaces)
+	}
+
+	as := doc.Airspaces[0]
+	if as.LowerRef != "FL" || as.UpperRef != "FL" {
+		t.Fatalf("expected lower/upper refs from uomDistVer fallback, got lower=%q upper=%q", as.LowerRef, as.UpperRef)
+	}
+}
+
 func TestParseCoordinateSupportsDecimalAndDMS(t *testing.T) {
 	t.Parallel()
 
@@ -293,6 +336,145 @@ func TestFileReaderReadMissingFrontierGbrWarnsAndContinues(t *testing.T) {
 	}
 	if !strings.Contains(warnings[0], "missing_border_uid=\"MISSING-BORDER\"") {
 		t.Fatalf("expected warning to include missing border UID, got %q", warnings[0])
+	}
+}
+
+func TestFileReaderReadFrontierUsesFNTAnchorNotPreviousVertex(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	inputPath := filepath.Join(tmpDir, "snapshot_frontier_subset_anchor.ofmx")
+
+	input := `<?xml version="1.0" encoding="UTF-8"?>
+<OFMX-Snapshot version="0.1.0" origin="unit-test" namespace="123e4567-e89b-12d3-a456-426614174000" created="2026-01-01T00:00:00Z" effective="2026-01-01T00:00:00Z">
+  <Ase>
+    <AseUid><codeType>R</codeType><codeId>LKFNT3</codeId></AseUid>
+    <txtName>Subset Border Zone</txtName>
+  </Ase>
+  <Abd>
+    <AbdUid><AseUid><codeType>R</codeType><codeId>LKFNT3</codeId></AseUid></AbdUid>
+    <Avx><codeType>GRC</codeType><geoLat>51.000000N</geoLat><geoLong>015.000000E</geoLong><codeDatum>WGE</codeDatum></Avx>
+    <Avx>
+      <GbrUid mid="BORDER-3"><txtName>TEST_BORDER_3</txtName></GbrUid>
+      <codeType>FNT</codeType>
+      <geoLat>49.900000N</geoLat>
+      <geoLong>014.200000E</geoLong>
+      <codeDatum>WGE</codeDatum>
+    </Avx>
+    <Avx><codeType>GRC</codeType><geoLat>49.800000N</geoLat><geoLong>014.400000E</geoLong><codeDatum>WGE</codeDatum></Avx>
+    <Avx><codeType>GRC</codeType><geoLat>51.000000N</geoLat><geoLong>015.000000E</geoLong><codeDatum>WGE</codeDatum></Avx>
+  </Abd>
+  <Gbr>
+    <GbrUid mid="BORDER-3"><txtName>TEST_BORDER_3</txtName></GbrUid>
+    <codeType />
+    <Gbv><codeType>GRC</codeType><geoLat>50.200000N</geoLat><geoLong>013.800000E</geoLong><codeDatum>WGE</codeDatum></Gbv>
+    <Gbv><codeType>GRC</codeType><geoLat>50.000000N</geoLat><geoLong>014.000000E</geoLong><codeDatum>WGE</codeDatum></Gbv>
+    <Gbv><codeType>GRC</codeType><geoLat>49.900000N</geoLat><geoLong>014.200000E</geoLong><codeDatum>WGE</codeDatum></Gbv>
+    <Gbv><codeType>GRC</codeType><geoLat>49.800000N</geoLat><geoLong>014.400000E</geoLong><codeDatum>WGE</codeDatum></Gbv>
+    <Gbv><codeType>GRC</codeType><geoLat>49.700000N</geoLat><geoLong>014.600000E</geoLong><codeDatum>WGE</codeDatum></Gbv>
+  </Gbr>
+</OFMX-Snapshot>`
+
+	if err := os.WriteFile(inputPath, []byte(input), 0o600); err != nil {
+		t.Fatalf("write input: %v", err)
+	}
+
+	doc, err := FileReader{}.Read(context.Background(), inputPath)
+	if err != nil {
+		t.Fatalf("reader.Read failed: %v", err)
+	}
+
+	if len(doc.AirspaceBorders) != 1 {
+		t.Fatalf("expected one airspace border, got %d", len(doc.AirspaceBorders))
+	}
+
+	pts := doc.AirspaceBorders[0].Points
+	containsFarBorderStart := false
+	containsFarBorderEnd := false
+	for _, p := range pts {
+		if p.Lat == 50.2 && p.Lon == 13.8 {
+			containsFarBorderStart = true
+		}
+		if p.Lat == 49.7 && p.Lon == 14.6 {
+			containsFarBorderEnd = true
+		}
+	}
+
+	if containsFarBorderStart || containsFarBorderEnd {
+		t.Fatalf("expected only local frontier segment, got %+v", pts)
+	}
+}
+
+func TestFileReaderReadFrontierSnapFailureFallsBackAndWarns(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	inputPath := filepath.Join(tmpDir, "snapshot_frontier_snap_fail.ofmx")
+
+	input := `<?xml version="1.0" encoding="UTF-8"?>
+<OFMX-Snapshot version="0.1.0" origin="unit-test" namespace="123e4567-e89b-12d3-a456-426614174000" created="2026-01-01T00:00:00Z" effective="2026-01-01T00:00:00Z">
+  <Ase>
+    <AseUid><codeType>R</codeType><codeId>LKFNT4</codeId></AseUid>
+    <txtName>Snap Fail Zone</txtName>
+  </Ase>
+  <Abd>
+    <AbdUid><AseUid><codeType>R</codeType><codeId>LKFNT4</codeId></AseUid></AbdUid>
+    <Avx><codeType>GRC</codeType><geoLat>50.000000N</geoLat><geoLong>014.000000E</geoLong><codeDatum>WGE</codeDatum></Avx>
+    <Avx>
+      <GbrUid mid="BORDER-4"><txtName>TEST_BORDER_4</txtName></GbrUid>
+      <codeType>FNT</codeType>
+      <geoLat>49.900000N</geoLat>
+      <geoLong>014.200000E</geoLong>
+      <codeDatum>WGE</codeDatum>
+    </Avx>
+    <Avx><codeType>GRC</codeType><geoLat>47.000000N</geoLat><geoLong>010.000000E</geoLong><codeDatum>WGE</codeDatum></Avx>
+    <Avx><codeType>GRC</codeType><geoLat>50.000000N</geoLat><geoLong>014.000000E</geoLong><codeDatum>WGE</codeDatum></Avx>
+  </Abd>
+  <Gbr>
+    <GbrUid mid="BORDER-4"><txtName>TEST_BORDER_4</txtName></GbrUid>
+    <codeType />
+    <Gbv><codeType>GRC</codeType><geoLat>50.000000N</geoLat><geoLong>014.000000E</geoLong><codeDatum>WGE</codeDatum></Gbv>
+    <Gbv><codeType>GRC</codeType><geoLat>49.900000N</geoLat><geoLong>014.200000E</geoLong><codeDatum>WGE</codeDatum></Gbv>
+    <Gbv><codeType>GRC</codeType><geoLat>49.800000N</geoLat><geoLong>014.400000E</geoLong><codeDatum>WGE</codeDatum></Gbv>
+  </Gbr>
+</OFMX-Snapshot>`
+
+	if err := os.WriteFile(inputPath, []byte(input), 0o600); err != nil {
+		t.Fatalf("write input: %v", err)
+	}
+
+	warnings := make([]string, 0, 1)
+	reader := FileReader{
+		Warningf: func(format string, args ...any) {
+			warnings = append(warnings, fmt.Sprintf(format, args...))
+		},
+	}
+
+	doc, err := reader.Read(context.Background(), inputPath)
+	if err != nil {
+		t.Fatalf("reader.Read failed: %v", err)
+	}
+
+	if len(doc.AirspaceBorders) != 1 {
+		t.Fatalf("expected one border, got %d", len(doc.AirspaceBorders))
+	}
+
+	pts := doc.AirspaceBorders[0].Points
+	fntPointCount := 0
+	for _, p := range pts {
+		if p.Lat == 49.9 && p.Lon == 14.2 {
+			fntPointCount++
+		}
+	}
+	if fntPointCount == 0 {
+		t.Fatalf("expected fallback to keep original FNT point, got %+v", pts)
+	}
+
+	if len(warnings) == 0 {
+		t.Fatal("expected snap failure warning")
+	}
+	if !strings.Contains(warnings[0], "expansion_skipped=snap_failed") {
+		t.Fatalf("expected snap failure warning details, got %q", warnings[0])
 	}
 }
 

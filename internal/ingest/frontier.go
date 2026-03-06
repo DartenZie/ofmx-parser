@@ -86,26 +86,19 @@ func buildGeographicalBorderIndex(gbrs []gbrXML, opts frontierExpansionOptions) 
 	return index, nil
 }
 
-func expandFrontierSegment(border []domain.OFMXGeoPoint, prev, next domain.OFMXGeoPoint, opts frontierExpansionOptions) []domain.OFMXGeoPoint {
+func expandFrontierSegment(border []domain.OFMXGeoPoint, startAnchor, stopAnchor domain.OFMXGeoPoint, opts frontierExpansionOptions) ([]domain.OFMXGeoPoint, projectedPoint, projectedPoint, bool) {
 	if len(border) < 2 {
-		return nil
+		return nil, projectedPoint{}, projectedPoint{}, false
 	}
 
-	start := nearestPointOnPolyline(border, prev)
-	end := nearestPointOnPolyline(border, next)
+	start := nearestPointOnPolyline(border, startAnchor)
+	end := nearestPointOnPolyline(border, stopAnchor)
 
-	if start.DistanceM <= opts.SnapToleranceMeters && end.DistanceM <= opts.SnapToleranceMeters {
-		return subPathBetween(border, start, end, opts.CoordinateEpsilon)
+	if start.DistanceM > opts.SnapToleranceMeters || end.DistanceM > opts.SnapToleranceMeters {
+		return nil, start, end, false
 	}
 
-	forwardScore := distanceMeters(prev, border[0]) + distanceMeters(next, border[len(border)-1])
-	reverseScore := distanceMeters(prev, border[len(border)-1]) + distanceMeters(next, border[0])
-	if reverseScore < forwardScore {
-		reversed := reversePolyline(border)
-		return dedupeConsecutive(reversed, opts.CoordinateEpsilon)
-	}
-
-	return dedupeConsecutive(border, opts.CoordinateEpsilon)
+	return subPathBetween(border, start, end, opts.CoordinateEpsilon), start, end, true
 }
 
 func appendPointUnique(points []domain.OFMXGeoPoint, p domain.OFMXGeoPoint, epsilon float64) []domain.OFMXGeoPoint {

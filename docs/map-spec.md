@@ -106,6 +106,11 @@ The following style-targeted layers are required.
 
 - geometry: Polygon
 - source: OFMX airspace features + border geometry
+- type filter: only OFMX airspaces with `codeType IN {ATZ, CTR, TMA, D, P, PR, R, TRA, TRA_GA, TSA}` are included
+  - configurable replacement via `transform.airspace.allowed_types`
+- lower-limit filter: only airspaces with lower limit `<= max_altitude_fl` (FL) are included
+  - configurable via `transform.airspace.max_altitude_fl`
+  - conversion: `SFC/AGL/HEI => FL0`, `STD/FL => FL value`, `MSL/AMSL/ALT/FT => floor(feet/100)`
 - curved OFMX borders (`CWA`/`CCA` arcs and `Circle`) are exported as deterministic densified polygon rings
 - mandatory attributes:
   - `id` (string)
@@ -129,7 +134,7 @@ The following style-targeted layers are required.
 ### 4.4 aviation_airspace_borders
 
 - geometry: LineString
-- source: derived from airspace polygon edges after deduplication
+- source: derived from filtered airspace polygon edges after deduplication
 - mandatory attributes:
   - `edge_id` (string, deterministic)
   - `zone_a` (string)

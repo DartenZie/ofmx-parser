@@ -100,7 +100,7 @@ go run ./cmd/ofmx-parser \
   --pmtiles-output path/to/output.pmtiles
 ```
 
-Optional config file path (reserved for extended behavior):
+Optional config file path:
 
 ```bash
 go run ./cmd/ofmx-parser --input path/to/input.ofmx --output path/to/output.xml --config configs/parser.example.yaml
@@ -110,7 +110,19 @@ go run ./cmd/ofmx-parser --input path/to/input.ofmx --output path/to/output.xml 
 
 Example file: `configs/parser.example.yaml`
 
-The config file is available in the project structure for future parser/mapping options. Current CLI behavior is driven primarily by flags.
+Supported config fields:
+
+- `transform.airspace.allowed_types`: optional replacement list for exported `Ase/AseUid/codeType` values.
+  - If omitted, built-in defaults are used.
+  - If provided, it replaces defaults for both XML airspace export and map zone/border export.
+  - Values are normalized to uppercase and deduplicated.
+- `transform.airspace.max_altitude_fl`: optional maximum allowed lower airspace limit in flight levels.
+  - Default is `95`.
+  - Minimum allowed value is `95`.
+  - Lower limit conversion rules:
+    - `SFC`/`AGL`/`HEI` => `FL 0`
+    - `STD`/`FL` => value treated as flight level
+    - `MSL`/`AMSL`/`ALT`/`FT` => value treated as feet and converted to `floor(feet/100)`
 
 Map-related flags:
 

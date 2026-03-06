@@ -65,7 +65,7 @@ func TestPipelineExecuteWritesXML(t *testing.T) {
   </Vor>
   <Ase>
     <AseUid>
-      <codeType>R</codeType>
+      <codeType>CTR</codeType>
       <codeId>LKR1</codeId>
     </AseUid>
     <txtName>Restricted Area</txtName>
@@ -78,7 +78,7 @@ func TestPipelineExecuteWritesXML(t *testing.T) {
   <Abd>
     <AbdUid>
       <AseUid>
-        <codeType>R</codeType>
+        <codeType>CTR</codeType>
         <codeId>LKR1</codeId>
       </AseUid>
     </AbdUid>

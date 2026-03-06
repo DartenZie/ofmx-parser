@@ -452,8 +452,10 @@ type aseXML struct {
 	CodeActivity     string `xml:"codeActivity"`
 	CodeDistVerLower string `xml:"codeDistVerLower"`
 	ValDistVerLower  string `xml:"valDistVerLower"`
+	UOMDistVerLower  string `xml:"uomDistVerLower"`
 	CodeDistVerUpper string `xml:"codeDistVerUpper"`
 	ValDistVerUpper  string `xml:"valDistVerUpper"`
+	UOMDistVerUpper  string `xml:"uomDistVerUpper"`
 	TxtRmk           string `xml:"txtRmk"`
 }
 
@@ -684,9 +686,9 @@ func mapAirspace(in aseXML) domain.OFMXAirspace {
 		Class:       strings.TrimSpace(in.CodeClass),
 		Activity:    strings.TrimSpace(in.CodeActivity),
 		LowerValueM: parseFloatOrDefault(in.ValDistVerLower, 0),
-		LowerRef:    strings.TrimSpace(in.CodeDistVerLower),
+		LowerRef:    firstNonEmpty(in.CodeDistVerLower, in.UOMDistVerLower),
 		UpperValueM: parseFloatOrDefault(in.ValDistVerUpper, 0),
-		UpperRef:    strings.TrimSpace(in.CodeDistVerUpper),
+		UpperRef:    firstNonEmpty(in.CodeDistVerUpper, in.UOMDistVerUpper),
 		Remark:      strings.TrimSpace(in.TxtRmk),
 	}
 }
@@ -768,10 +770,19 @@ func mapAirspaceBorder(in abdXML, borderIndex geographicalBorderIndex, airspaceN
 			continue
 		}
 
-		prev := parsedVertices[(i-1+len(parsedVertices))%len(parsedVertices)].Point
 		next := parsedVertices[(i+1)%len(parsedVertices)].Point
-		expanded := expandFrontierSegment(gbrPoints, prev, next, opts)
-		if len(expanded) == 0 {
+		expanded, startProjection, stopProjection, ok := expandFrontierSegment(gbrPoints, v.Point, next, opts)
+		if !ok || len(expanded) == 0 {
+			opts.Warningf(
+				"OFMX frontier warning airspace_id=%q airspace_name=%q border_uid=%q border_name=%q expansion_skipped=snap_failed start_distance_m=%.1f stop_distance_m=%.1f snap_tolerance_m=%.1f",
+				out.AirspaceID,
+				strings.TrimSpace(airspaceNames[out.AirspaceID]),
+				v.GbrMID,
+				v.GbrTxtName,
+				startProjection.DistanceM,
+				stopProjection.DistanceM,
+				opts.SnapToleranceMeters,
+			)
 			out.Points = appendPointUnique(out.Points, v.Point, opts.CoordinateEpsilon)
 			continue
 		}

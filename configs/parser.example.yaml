@@ -1,9 +1,18 @@
-# Reserved for future parser behavior switches.
-# Current CLI behavior is driven by --input and --output flags.
+transform:
+  airspace:
+    # Optional maximum allowed lower limit in flight levels.
+    # Values below 95 are invalid. Default is 95.
+    max_altitude_fl: 95
 
-parser:
-  strict_mode: true
-  timezone: "UTC"
-
-output:
-  pretty_print: true
+    # Optional replacement allowlist for exported OFMX Ase/codeType values.
+    # When this list is set, it replaces built-in defaults.
+    allowed_types:
+      - ATZ
+      - CTR
+      - TMA
+      - D
+      - P
+      - PR
+      - R
+      - TRA
+      - TSA

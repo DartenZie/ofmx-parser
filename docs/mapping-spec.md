@@ -85,10 +85,19 @@ Common target mapping:
 - `Ase/txtName` (fallback `codeId`) -> `Airspace/@n`
 - `Ase/codeClass` (fallback `codeActivity`, `codeType`) -> `Airspace/@d`
 - `Ase/valDistVerLower` -> `Airspace/@lowM`
-- `Ase/codeDistVerLower` -> `Airspace/@lowRef`
+- `Ase/codeDistVerLower` (fallback `Ase/uomDistVerLower`) -> `Airspace/@lowRef`
 - `Ase/valDistVerUpper` -> `Airspace/@upM` (fallback lower value)
-- `Ase/codeDistVerUpper` -> `Airspace/@upRef`
+- `Ase/codeDistVerUpper` (fallback `Ase/uomDistVerUpper`) -> `Airspace/@upRef`
 - `Ase/txtRmk` -> `Airspace/@rmk`
+- Airspace type filter: only `ATZ`, `CTR`, `TMA`, `D`, `P`, `PR`, `R`, `TRA`, `TRA_GA`, `TSA` are exported.
+  - Config override: `transform.airspace.allowed_types` replaces the default allowlist when provided.
+- Airspace lower-limit filter: only airspaces with lower limit `<= max_altitude_fl` (FL) are exported.
+  - Config key: `transform.airspace.max_altitude_fl`
+  - Default: `95`; minimum allowed value: `95`
+  - Lower limit conversion:
+    - `SFC`/`AGL`/`HEI` => `FL 0`
+    - `STD`/`FL` => value interpreted directly as FL
+    - `MSL`/`AMSL`/`ALT`/`FT` => value interpreted as feet and converted to `floor(feet/100)`
 
 Horizontal geometry:
 
@@ -107,8 +116,9 @@ Horizontal geometry:
 - `Abd/Avx/codeType=FNT` is treated as a frontier placeholder and resolved against `Gbr` geometry.
   - Border resolution key priority: `Avx/GbrUid/@mid`, fallback `Avx/GbrUid/txtName`.
   - `Gbr/Gbv` points are indexed once per dataset (`codeDatum=WGE`) and inserted into airspace borders.
-  - Inserted border direction is chosen to continue from the previous vertex toward the next vertex.
-  - If anchors are within snap tolerance, only the border subpath between the nearest points is used.
+  - Border copying starts at the FNT vertex coordinate and follows the referenced border toward the next `Avx` vertex.
+  - If both start and stop anchors are within snap tolerance, only that border subpath is inserted.
+  - If either anchor does not snap within tolerance, frontier expansion is skipped, a warning is emitted, and the original FNT coordinate is kept.
   - Consecutive duplicate coordinates are removed using coordinate epsilon.
   - Missing `Gbr` emits a structured warning and falls back to the original frontier coordinate.
 - Duplicate points are removed.

@@ -14,12 +14,28 @@ import (
 	"github.com/DartenZie/ofmx-parser/internal/domain"
 )
 
+var defaultAllowedAirspaceTypes = map[string]struct{}{
+	"ATZ":    {},
+	"CTR":    {},
+	"TMA":    {},
+	"D":      {},
+	"P":      {},
+	"PR":     {},
+	"R":      {},
+	"TRA":    {},
+	"TRA_GA": {},
+	"TSA":    {},
+}
+
 type Mapper interface {
 	Map(ctx context.Context, input domain.OFMXDocument) (domain.OutputDocument, error)
 }
 
 // DefaultMapper implements the default mapping ruleset.
-type DefaultMapper struct{}
+type DefaultMapper struct {
+	AllowedAirspaceTypes []string
+	MaxAirspaceLowerFL   int
+}
 
 // Map transforms ingested OFMX data into the target output document.
 func (m DefaultMapper) Map(_ context.Context, input domain.OFMXDocument) (domain.OutputDocument, error) {
@@ -29,7 +45,11 @@ func (m DefaultMapper) Map(_ context.Context, input domain.OFMXDocument) (domain
 	}
 
 	navaids := mapNavaids(input)
-	airspaces := mapAirspaces(input)
+	airspaces := mapAirspaces(
+		input,
+		effectiveAllowedAirspaceTypeSet(m.AllowedAirspaceTypes),
+		effectiveMaxAirspaceLowerFL(m.MaxAirspaceLowerFL),
+	)
 	obstacles := mapObstacles(input)
 
 	region := firstRegion(input.SnapshotMeta.Regions)
@@ -204,7 +224,7 @@ func mapNavaids(input domain.OFMXDocument) []domain.OutputNavaid {
 	return out
 }
 
-func mapAirspaces(input domain.OFMXDocument) []domain.OutputAirspace {
+func mapAirspaces(input domain.OFMXDocument, allowedTypes map[string]struct{}, maxLowerFL int) []domain.OutputAirspace {
 	borderByAirspace := make(map[string][]domain.OFMXGeoPoint)
 	for _, border := range input.AirspaceBorders {
 		if strings.TrimSpace(border.AirspaceID) == "" || len(border.Points) == 0 {
@@ -215,6 +235,10 @@ func mapAirspaces(input domain.OFMXDocument) []domain.OutputAirspace {
 
 	out := make([]domain.OutputAirspace, 0, len(input.Airspaces))
 	for _, as := range input.Airspaces {
+		if !passesAirspaceFilters(as, allowedTypes, maxLowerFL) {
+			continue
+		}
+
 		pts := dedupePoints(borderByAirspace[as.ID])
 		if len(pts) < 3 {
 			continue
@@ -274,6 +298,31 @@ func mapAirspaces(input domain.OFMXDocument) []domain.OutputAirspace {
 	return out
 }
 
+func isAllowedAirspaceType(raw string, allowedTypes map[string]struct{}) bool {
+	_, ok := allowedTypes[strings.ToUpper(strings.TrimSpace(raw))]
+	return ok
+}
+
+func effectiveAllowedAirspaceTypeSet(custom []string) map[string]struct{} {
+	if len(custom) == 0 {
+		return defaultAllowedAirspaceTypes
+	}
+
+	out := make(map[string]struct{}, len(custom))
+	for _, raw := range custom {
+		v := strings.ToUpper(strings.TrimSpace(raw))
+		if v == "" {
+			continue
+		}
+		out[v] = struct{}{}
+	}
+	if len(out) == 0 {
+		return defaultAllowedAirspaceTypes
+	}
+
+	return out
+}
+
 func mapObstacles(input domain.OFMXDocument) []domain.OutputObstacle {
 	out := make([]domain.OutputObstacle, 0, len(input.Obstacles))
 	for i, obs := range input.Obstacles {
@@ -321,7 +370,7 @@ func mapHeightRef(ofmxCode string) string {
 		return "UNL"
 	case strings.Contains(v, "FL"):
 		return "FL"
-	case strings.Contains(v, "SFC"), strings.Contains(v, "AGL"):
+	case strings.Contains(v, "SFC"), strings.Contains(v, "AGL"), strings.Contains(v, "HEI"):
 		return "AGL"
 	case strings.Contains(v, "MSL"), strings.Contains(v, "AMSL"):
 		return "MSL"

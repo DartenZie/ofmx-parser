@@ -18,10 +18,16 @@ type MapMapper interface {
 }
 
 // DefaultMapMapper provides the default OFMX to map-dataset mapping implementation.
-type DefaultMapMapper struct{}
+type DefaultMapMapper struct {
+	AllowedAirspaceTypes []string
+	MaxAirspaceLowerFL   int
+}
 
 // MapToMapDataset maps OFMXDocument into map-oriented intermediate structures.
 func (m DefaultMapMapper) MapToMapDataset(_ context.Context, input domain.OFMXDocument) (domain.MapDataset, error) {
+	allowedTypes := effectiveAllowedAirspaceTypeSet(m.AllowedAirspaceTypes)
+	maxLowerFL := effectiveMaxAirspaceLowerFL(m.MaxAirspaceLowerFL)
+
 	dataset := domain.MapDataset{
 		Airports:         make([]domain.MapAirportPoint, 0, len(input.Airports)),
 		Zones:            make([]domain.MapZonePolygon, 0, len(input.Airspaces)),
@@ -54,7 +60,13 @@ func (m DefaultMapMapper) MapToMapDataset(_ context.Context, input domain.OFMXDo
 		}
 	}
 
+	allowedAirspaceIDs := make(map[string]struct{}, len(input.Airspaces))
 	for _, as := range input.Airspaces {
+		if !passesAirspaceFilters(as, allowedTypes, maxLowerFL) {
+			continue
+		}
+
+		allowedAirspaceIDs[as.ID] = struct{}{}
 		dataset.Zones = append(dataset.Zones, domain.MapZonePolygon{
 			ID:      as.ID,
 			Name:    as.Name,
@@ -73,7 +85,7 @@ func (m DefaultMapMapper) MapToMapDataset(_ context.Context, input domain.OFMXDo
 		return dataset.Zones[i].ID < dataset.Zones[j].ID
 	})
 
-	dataset.AirspaceBorders = dedupeAirspaceBorders(input.AirspaceBorders)
+	dataset.AirspaceBorders = dedupeAirspaceBorders(filterAirspaceBordersByID(input.AirspaceBorders, allowedAirspaceIDs))
 
 	for _, v := range input.VORs {
 		dataset.PointsOfInterest = append(dataset.PointsOfInterest, domain.MapPOI{ID: v.ID, Kind: "VOR", Name: firstNonEmpty(v.Name, v.ID), Lat: v.Lat, Lon: v.Lon})
@@ -105,6 +117,22 @@ func (m DefaultMapMapper) MapToMapDataset(_ context.Context, input domain.OFMXDo
 	})
 
 	return dataset, nil
+}
+
+func filterAirspaceBordersByID(borders []domain.OFMXAirspaceBorder, allowed map[string]struct{}) []domain.OFMXAirspaceBorder {
+	if len(allowed) == 0 || len(borders) == 0 {
+		return nil
+	}
+
+	out := make([]domain.OFMXAirspaceBorder, 0, len(borders))
+	for _, border := range borders {
+		if _, ok := allowed[border.AirspaceID]; !ok {
+			continue
+		}
+		out = append(out, border)
+	}
+
+	return out
 }
 
 const borderQuantizationFactor = 1_000_000.0

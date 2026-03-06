@@ -22,7 +22,7 @@ const mapModeOFMXInput = `<?xml version="1.0" encoding="UTF-8"?>
     <valElev>380</valElev>
   </Ahp>
   <Ase>
-    <AseUid><codeType>R</codeType><codeId>LKR1</codeId></AseUid>
+    <AseUid><codeType>CTR</codeType><codeId>LKR1</codeId></AseUid>
     <txtName>Restricted Area</txtName>
     <codeClass>C</codeClass>
     <codeDistVerLower>SFC</codeDistVerLower>
@@ -31,7 +31,7 @@ const mapModeOFMXInput = `<?xml version="1.0" encoding="UTF-8"?>
     <valDistVerUpper>2450</valDistVerUpper>
   </Ase>
   <Abd>
-    <AbdUid><AseUid><codeType>R</codeType><codeId>LKR1</codeId></AseUid></AbdUid>
+    <AbdUid><AseUid><codeType>CTR</codeType><codeId>LKR1</codeId></AseUid></AbdUid>
     <Avx><codeType>GRC</codeType><geoLat>49.000000N</geoLat><geoLong>014.000000E</geoLong><codeDatum>WGE</codeDatum></Avx>
     <Avx><codeType>GRC</codeType><geoLat>49.100000N</geoLat><geoLong>014.200000E</geoLong><codeDatum>WGE</codeDatum></Avx>
     <Avx><codeType>GRC</codeType><geoLat>48.900000N</geoLat><geoLong>014.300000E</geoLong><codeDatum>WGE</codeDatum></Avx>

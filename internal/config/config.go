@@ -8,8 +8,15 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/DartenZie/ofmx-parser/internal/domain"
+	"gopkg.in/yaml.v3"
+)
+
+const (
+	DefaultAirspaceMaxAltitudeFL = 95
+	MinAirspaceMaxAltitudeFL     = 95
 )
 
 type CLIConfig struct {
@@ -95,9 +102,54 @@ func (c CLIConfig) Validate() error {
 	return nil
 }
 
-// FileConfig stores raw config file content for future extension.
+// FileConfig stores optional file-based configuration.
 type FileConfig struct {
-	Raw []byte
+	Transform TransformConfig `yaml:"transform" json:"transform"`
+}
+
+type TransformConfig struct {
+	Airspace AirspaceTransformConfig `yaml:"airspace" json:"airspace"`
+}
+
+type AirspaceTransformConfig struct {
+	AllowedTypes  []string `yaml:"allowed_types" json:"allowed_types"`
+	MaxAltitudeFL *int     `yaml:"max_altitude_fl" json:"max_altitude_fl"`
+}
+
+func (c *FileConfig) normalize() {
+	if len(c.Transform.Airspace.AllowedTypes) == 0 {
+		return
+	}
+
+	normalized := make([]string, 0, len(c.Transform.Airspace.AllowedTypes))
+	seen := make(map[string]struct{}, len(c.Transform.Airspace.AllowedTypes))
+	for _, raw := range c.Transform.Airspace.AllowedTypes {
+		v := strings.ToUpper(strings.TrimSpace(raw))
+		if v == "" {
+			continue
+		}
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		normalized = append(normalized, v)
+	}
+
+	c.Transform.Airspace.AllowedTypes = normalized
+}
+
+func (c FileConfig) EffectiveAirspaceMaxAltitudeFL() int {
+	if c.Transform.Airspace.MaxAltitudeFL == nil {
+		return DefaultAirspaceMaxAltitudeFL
+	}
+	return *c.Transform.Airspace.MaxAltitudeFL
+}
+
+func (c FileConfig) validate() error {
+	if c.Transform.Airspace.MaxAltitudeFL != nil && *c.Transform.Airspace.MaxAltitudeFL < MinAirspaceMaxAltitudeFL {
+		return fmt.Errorf("transform.airspace.max_altitude_fl must be >= %d", MinAirspaceMaxAltitudeFL)
+	}
+	return nil
 }
 
 // LoadFile loads a config file from disk.
@@ -107,5 +159,14 @@ func LoadFile(path string) (FileConfig, error) {
 		return FileConfig{}, domain.NewError(domain.ErrConfig, fmt.Sprintf("failed to read config file %q", path), err)
 	}
 
-	return FileConfig{Raw: b}, nil
+	var cfg FileConfig
+	if err := yaml.Unmarshal(b, &cfg); err != nil {
+		return FileConfig{}, domain.NewError(domain.ErrConfig, fmt.Sprintf("failed to parse config file %q", path), err)
+	}
+	cfg.normalize()
+	if err := cfg.validate(); err != nil {
+		return FileConfig{}, domain.NewError(domain.ErrConfig, fmt.Sprintf("invalid config file %q", path), err)
+	}
+
+	return cfg, nil
 }

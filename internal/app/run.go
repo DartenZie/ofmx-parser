@@ -21,18 +21,30 @@ func Run(ctx context.Context, args []string) error {
 		return err
 	}
 
+	fileCfg := config.FileConfig{}
+
 	if cfg.ConfigPath != "" {
-		if _, err := config.LoadFile(cfg.ConfigPath); err != nil {
+		loadedCfg, err := config.LoadFile(cfg.ConfigPath)
+		if err != nil {
 			return err
 		}
+		fileCfg = loadedCfg
 	}
 
 	reader := ingest.FileReader{ArcMaxChordLengthMeters: cfg.ArcMaxChordM}
+	xmlMapper := transform.DefaultMapper{
+		AllowedAirspaceTypes: fileCfg.Transform.Airspace.AllowedTypes,
+		MaxAirspaceLowerFL:   fileCfg.EffectiveAirspaceMaxAltitudeFL(),
+	}
+	mapMapper := transform.DefaultMapMapper{
+		AllowedAirspaceTypes: fileCfg.Transform.Airspace.AllowedTypes,
+		MaxAirspaceLowerFL:   fileCfg.EffectiveAirspaceMaxAltitudeFL(),
+	}
 
 	if cfg.OutputPath != "" {
 		runner := pipeline.New(
 			reader,
-			transform.DefaultMapper{},
+			xmlMapper,
 			output.XMLFileWriter{},
 		)
 
@@ -64,7 +76,7 @@ func Run(ctx context.Context, args []string) error {
 		}
 
 		mapSvc := pipeline.NewMapService(
-			transform.DefaultMapMapper{},
+			mapMapper,
 			output.GeoJSONFileWriter{},
 			output.ExecTilemakerRunner{},
 		)
