@@ -100,11 +100,23 @@ go run ./cmd/ofmx-parser \
   --pmtiles-output path/to/output.pmtiles
 ```
 
+Dual mode ingest behavior:
+
+- OFMX input is parsed once and reused for both XML and PMTiles branches.
+
 Optional config file path:
 
 ```bash
 go run ./cmd/ofmx-parser --input path/to/input.ofmx --output path/to/output.xml --config configs/parser.example.yaml
 ```
+
+Config auto-discovery (when `--config` is omitted):
+
+- `configs/parser.yaml`
+- `configs/parser.yml`
+- `configs/parser.example.yaml`
+
+The first existing file is loaded.
 
 ## Configuration
 
@@ -133,6 +145,8 @@ Map-related flags:
 - `--tilemaker-config`: optional custom tilemaker config override
 - `--tilemaker-process`: optional custom tilemaker process.lua override
 - `--map-temp-dir`: optional temp directory for generated GeoJSON/config/process files
+  - when omitted, a temporary directory is created automatically and removed after map generation
+  - when provided, generated runtime files are kept in the specified directory
 
 ## Testing Strategy
 

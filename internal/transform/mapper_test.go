@@ -254,3 +254,36 @@ func TestDefaultMapperFiltersByConfiguredMaxAltitudeFL(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizePolygonPointsRemovesOnlyConsecutiveDuplicates(t *testing.T) {
+	t.Parallel()
+
+	points := []domain.OFMXGeoPoint{
+		{Lat: 49.0, Lon: 14.0},
+		{Lat: 49.0, Lon: 14.0},
+		{Lat: 49.1, Lon: 14.1},
+		{Lat: 49.0, Lon: 14.0},
+		{Lat: 49.2, Lon: 14.2},
+	}
+
+	normalized := normalizePolygonPoints(points)
+	if len(normalized) != 4 {
+		t.Fatalf("expected 4 points after consecutive dedupe, got %d", len(normalized))
+	}
+}
+
+func TestNormalizePolygonPointsDropsClosingDuplicate(t *testing.T) {
+	t.Parallel()
+
+	points := []domain.OFMXGeoPoint{
+		{Lat: 49.0, Lon: 14.0},
+		{Lat: 49.1, Lon: 14.1},
+		{Lat: 49.2, Lon: 14.2},
+		{Lat: 49.0, Lon: 14.0},
+	}
+
+	normalized := normalizePolygonPoints(points)
+	if len(normalized) != 3 {
+		t.Fatalf("expected closing duplicate to be removed, got %d", len(normalized))
+	}
+}

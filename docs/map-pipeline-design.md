@@ -29,7 +29,7 @@ Logical flow:
 4. Invoke tilemaker against OSM PBF plus generated sources.
 5. Produce `.pmtiles` artifact.
 
-XML and map branches may run independently or together.
+XML and map branches may run independently or together. In dual mode, OFMX ingest is executed once and reused by both branches.
 
 ## 4. CLI Contract (Normative)
 
@@ -69,6 +69,11 @@ Generated transient assets (in temp directory):
 - `aviation_airspace_borders.geojson`
 - generated tilemaker `tilemaker.generated.config.json`
 - generated tilemaker `tilemaker.generated.process.lua`
+
+Temp directory lifecycle:
+
+- if `--map-temp-dir` is provided, generated runtime artifacts are preserved in that directory,
+- if omitted, an auto-created temporary directory is removed after map pipeline completion (success or failure).
 
 Final artifact:
 

@@ -65,31 +65,47 @@ func (r FileReader) frontierOptions() frontierExpansionOptions {
 }
 
 // Read loads and parses an OFMX snapshot file.
-func (r FileReader) Read(_ context.Context, path string) (domain.OFMXDocument, error) {
+func (r FileReader) Read(ctx context.Context, path string) (domain.OFMXDocument, error) {
+
+	if err := ctx.Err(); err != nil {
+		return domain.OFMXDocument{}, domain.NewError(domain.ErrIngest, "OFMX ingest cancelled", err)
+	}
+
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return domain.OFMXDocument{}, domain.NewError(domain.ErrIngest, fmt.Sprintf("failed to read input file %q", path), err)
 	}
 
-	doc, err := parseSnapshotWithOptions(b, r.frontierOptions())
+	if err := ctx.Err(); err != nil {
+		return domain.OFMXDocument{}, domain.NewError(domain.ErrIngest, "OFMX ingest cancelled", err)
+	}
+
+	doc, err := parseSnapshotWithOptionsContext(ctx, b, r.frontierOptions())
 	if err != nil {
 		return domain.OFMXDocument{}, err
 	}
 
 	doc.SourcePath = path
-	doc.RawXML = b
 
 	return doc, nil
 }
 
 func parseSnapshot(raw []byte) (domain.OFMXDocument, error) {
-	return parseSnapshotWithOptions(raw, FileReader{}.frontierOptions())
+	return parseSnapshotWithOptionsContext(context.Background(), raw, FileReader{}.frontierOptions())
 }
 
 func parseSnapshotWithOptions(raw []byte, opts frontierExpansionOptions) (domain.OFMXDocument, error) {
+	return parseSnapshotWithOptionsContext(context.Background(), raw, opts)
+}
+
+func parseSnapshotWithOptionsContext(ctx context.Context, raw []byte, opts frontierExpansionOptions) (domain.OFMXDocument, error) {
 	dec := xml.NewDecoder(bytes.NewReader(raw))
 
 	for {
+		if err := ctx.Err(); err != nil {
+			return domain.OFMXDocument{}, domain.NewError(domain.ErrIngest, "OFMX ingest cancelled", err)
+		}
+
 		tok, err := dec.Token()
 		if err != nil {
 			return domain.OFMXDocument{}, domain.NewError(domain.ErrIngest, "failed to parse OFMX XML", err)
@@ -109,7 +125,7 @@ func parseSnapshotWithOptions(raw []byte, opts frontierExpansionOptions) (domain
 			return domain.OFMXDocument{}, err
 		}
 
-		doc, err := parseSnapshotContent(dec, opts)
+		doc, err := parseSnapshotContent(ctx, dec, opts)
 		if err != nil {
 			return domain.OFMXDocument{}, err
 		}
@@ -168,7 +184,7 @@ type featureParseState struct {
 	gbrs []gbrXML
 }
 
-func parseSnapshotContent(dec *xml.Decoder, opts frontierExpansionOptions) (domain.OFMXDocument, error) {
+func parseSnapshotContent(ctx context.Context, dec *xml.Decoder, opts frontierExpansionOptions) (domain.OFMXDocument, error) {
 	doc := domain.OFMXDocument{
 		FeatureCounts: make(map[string]int),
 	}
@@ -178,6 +194,10 @@ func parseSnapshotContent(dec *xml.Decoder, opts frontierExpansionOptions) (doma
 	depth := 1
 
 	for depth > 0 {
+		if err := ctx.Err(); err != nil {
+			return domain.OFMXDocument{}, domain.NewError(domain.ErrIngest, "OFMX ingest cancelled", err)
+		}
+
 		tok, err := dec.Token()
 		if err != nil {
 			return domain.OFMXDocument{}, domain.NewError(domain.ErrIngest, "failed to read OFMX-Snapshot content", err)

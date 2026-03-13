@@ -19,9 +19,9 @@ const (
 	defaultTilemakerBin  = "tilemaker"
 	generatedConfigName  = "tilemaker.generated.config.json"
 	generatedProcessName = "tilemaker.generated.process.lua"
-	mapLayersMaxZoom     = 14
-	mapLayersBaseZoom    = 14
-	mapLayersMinZoom     = 0
+	mapLayersMaxZoom     = 10
+	mapLayersBaseZoom    = 10
+	mapLayersMinZoom     = 5
 )
 
 // TilemakerRunner executes tilemaker to build PMTiles.

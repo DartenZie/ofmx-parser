@@ -50,13 +50,11 @@ func (m DefaultMapMapper) MapToMapDataset(_ context.Context, input domain.OFMXDo
 		return dataset.Airports[i].ID < dataset.Airports[j].ID
 	})
 
-	polygonByAirspace := make(map[string][]domain.OFMXGeoPoint)
+	polygonPartsByAirspace := make(map[string][][]domain.OFMXGeoPoint)
 	for _, border := range input.AirspaceBorders {
-		if _, exists := polygonByAirspace[border.AirspaceID]; exists {
-			continue
-		}
-		if len(border.Points) >= 3 {
-			polygonByAirspace[border.AirspaceID] = append([]domain.OFMXGeoPoint(nil), border.Points...)
+		polygon := normalizePolygonPoints(border.Points)
+		if len(polygon) >= 3 {
+			polygonPartsByAirspace[border.AirspaceID] = append(polygonPartsByAirspace[border.AirspaceID], polygon)
 		}
 	}
 
@@ -66,7 +64,16 @@ func (m DefaultMapMapper) MapToMapDataset(_ context.Context, input domain.OFMXDo
 			continue
 		}
 
+		polygon := resolveZonePolygon(polygonPartsByAirspace[as.ID])
+		if len(polygon) < 3 {
+			continue
+		}
+
 		allowedAirspaceIDs[as.ID] = struct{}{}
+		upValue := as.UpperValueM
+		if upValue == 0 {
+			upValue = as.LowerValueM
+		}
 		dataset.Zones = append(dataset.Zones, domain.MapZonePolygon{
 			ID:      as.ID,
 			Name:    as.Name,
@@ -74,10 +81,10 @@ func (m DefaultMapMapper) MapToMapDataset(_ context.Context, input domain.OFMXDo
 			Class:   as.Class,
 			LowM:    as.LowerValueM,
 			LowRef:  mapHeightRef(as.LowerRef),
-			UpM:     as.UpperValueM,
+			UpM:     upValue,
 			UpRef:   mapHeightRef(as.UpperRef),
 			Rmk:     as.Remark,
-			Polygon: polygonByAirspace[as.ID],
+			Polygon: polygon,
 		})
 	}
 
@@ -117,6 +124,102 @@ func (m DefaultMapMapper) MapToMapDataset(_ context.Context, input domain.OFMXDo
 	})
 
 	return dataset, nil
+}
+
+func resolveZonePolygon(parts [][]domain.OFMXGeoPoint) []domain.OFMXGeoPoint {
+	if len(parts) == 0 {
+		return nil
+	}
+
+	ordered := append([][]domain.OFMXGeoPoint(nil), parts...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		return polygonAreaAbs(ordered[i]) > polygonAreaAbs(ordered[j])
+	})
+
+	out := append([]domain.OFMXGeoPoint(nil), ordered[0]...)
+	used := make([]bool, len(ordered))
+	used[0] = true
+
+	for {
+		merged := false
+		for i, part := range ordered {
+			if used[i] {
+				continue
+			}
+
+			next, ok := stitchPolygonChains(out, part)
+			if !ok {
+				continue
+			}
+
+			out = next
+			used[i] = true
+			merged = true
+		}
+
+		if !merged {
+			break
+		}
+	}
+
+	return normalizePolygonPoints(out)
+}
+
+func stitchPolygonChains(a, b []domain.OFMXGeoPoint) ([]domain.OFMXGeoPoint, bool) {
+	if len(a) < 2 || len(b) < 2 {
+		return nil, false
+	}
+
+	aStart := a[0]
+	aEnd := a[len(a)-1]
+	bStart := b[0]
+	bEnd := b[len(b)-1]
+
+	switch {
+	case pointsEqualWithEpsilon(aEnd, bStart, polygonCoordinateEpsilon):
+		out := append(append([]domain.OFMXGeoPoint(nil), a...), b[1:]...)
+		return out, true
+	case pointsEqualWithEpsilon(aEnd, bEnd, polygonCoordinateEpsilon):
+		rb := reversedPoints(b)
+		out := append(append([]domain.OFMXGeoPoint(nil), a...), rb[1:]...)
+		return out, true
+	case pointsEqualWithEpsilon(aStart, bEnd, polygonCoordinateEpsilon):
+		out := append(append([]domain.OFMXGeoPoint(nil), b[:len(b)-1]...), a...)
+		return out, true
+	case pointsEqualWithEpsilon(aStart, bStart, polygonCoordinateEpsilon):
+		rb := reversedPoints(b)
+		out := append(append([]domain.OFMXGeoPoint(nil), rb[:len(rb)-1]...), a...)
+		return out, true
+	default:
+		return nil, false
+	}
+}
+
+func reversedPoints(points []domain.OFMXGeoPoint) []domain.OFMXGeoPoint {
+	out := append([]domain.OFMXGeoPoint(nil), points...)
+	for i := 0; i < len(out)/2; i++ {
+		j := len(out) - 1 - i
+		out[i], out[j] = out[j], out[i]
+	}
+	return out
+}
+
+func polygonAreaAbs(points []domain.OFMXGeoPoint) float64 {
+	if len(points) < 3 {
+		return 0
+	}
+
+	area2 := 0.0
+	for i := 0; i < len(points); i++ {
+		next := (i + 1) % len(points)
+		area2 += points[i].Lon*points[next].Lat - points[next].Lon*points[i].Lat
+	}
+
+	if area2 < 0 {
+		area2 = -area2
+	}
+
+	return area2 / 2.0
 }
 
 func filterAirspaceBordersByID(borders []domain.OFMXAirspaceBorder, allowed map[string]struct{}) []domain.OFMXAirspaceBorder {

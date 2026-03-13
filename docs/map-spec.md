@@ -112,6 +112,9 @@ The following style-targeted layers are required.
   - configurable via `transform.airspace.max_altitude_fl`
   - conversion: `SFC/AGL/HEI => FL0`, `STD/FL => FL value`, `MSL/AMSL/ALT/FT => floor(feet/100)`
 - curved OFMX borders (`CWA`/`CCA` arcs and `Circle`) are exported as deterministic densified polygon rings
+- `Abd` records linked to the same airspace id are stitched when endpoints connect;
+  if multiple disconnected rings remain, the largest ring is used for `aviation_zones` polygon geometry
+- polygon normalization removes only consecutive duplicate points and an explicit closing duplicate
 - mandatory attributes:
   - `id` (string)
   - `name` (string)

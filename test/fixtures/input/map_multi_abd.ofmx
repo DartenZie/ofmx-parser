@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OFMX-Snapshot version="0.1.0" origin="unit-test" namespace="123e4567-e89b-12d3-a456-426614174000" created="2026-01-01T00:00:00Z" effective="2026-01-01T00:00:00Z">
+  <Ase>
+    <AseUid><codeType>CTR</codeType><codeId>LKMB1</codeId></AseUid>
+    <txtName>Multi Border Zone</txtName>
+    <codeClass>C</codeClass>
+    <codeDistVerLower>SFC</codeDistVerLower>
+    <valDistVerLower>0</valDistVerLower>
+    <codeDistVerUpper>MSL</codeDistVerUpper>
+    <valDistVerUpper>2450</valDistVerUpper>
+  </Ase>
+  <Abd>
+    <AbdUid><AseUid><codeType>CTR</codeType><codeId>LKMB1</codeId></AseUid></AbdUid>
+    <Avx><codeType>GRC</codeType><geoLat>49.000000N</geoLat><geoLong>014.000000E</geoLong><codeDatum>WGE</codeDatum></Avx>
+    <Avx><codeType>GRC</codeType><geoLat>49.100000N</geoLat><geoLong>014.100000E</geoLong><codeDatum>WGE</codeDatum></Avx>
+    <Avx><codeType>GRC</codeType><geoLat>49.000000N</geoLat><geoLong>014.200000E</geoLong><codeDatum>WGE</codeDatum></Avx>
+  </Abd>
+  <Abd>
+    <AbdUid><AseUid><codeType>CTR</codeType><codeId>LKMB1</codeId></AseUid></AbdUid>
+    <Avx><codeType>GRC</codeType><geoLat>49.200000N</geoLat><geoLong>014.200000E</geoLong><codeDatum>WGE</codeDatum></Avx>
+    <Avx><codeType>GRC</codeType><geoLat>49.300000N</geoLat><geoLong>014.300000E</geoLong><codeDatum>WGE</codeDatum></Avx>
+    <Avx><codeType>GRC</codeType><geoLat>49.200000N</geoLat><geoLong>014.400000E</geoLong><codeDatum>WGE</codeDatum></Avx>
+  </Abd>
+</OFMX-Snapshot>

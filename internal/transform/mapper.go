@@ -239,7 +239,7 @@ func mapAirspaces(input domain.OFMXDocument, allowedTypes map[string]struct{}, m
 			continue
 		}
 
-		pts := dedupePoints(borderByAirspace[as.ID])
+		pts := normalizePolygonPoints(borderByAirspace[as.ID])
 		if len(pts) < 3 {
 			continue
 		}
@@ -349,18 +349,34 @@ func mapObstacles(input domain.OFMXDocument) []domain.OutputObstacle {
 	return out
 }
 
-func dedupePoints(points []domain.OFMXGeoPoint) []domain.OFMXGeoPoint {
-	seen := make(map[string]struct{}, len(points))
+const polygonCoordinateEpsilon = 1e-7
+
+func normalizePolygonPoints(points []domain.OFMXGeoPoint) []domain.OFMXGeoPoint {
+	if len(points) == 0 {
+		return nil
+	}
+
 	out := make([]domain.OFMXGeoPoint, 0, len(points))
 	for _, p := range points {
-		key := fmt.Sprintf("%.7f|%.7f", p.Lat, p.Lon)
-		if _, ok := seen[key]; ok {
+		if len(out) > 0 && pointsEqualWithEpsilon(out[len(out)-1], p, polygonCoordinateEpsilon) {
 			continue
 		}
-		seen[key] = struct{}{}
 		out = append(out, p)
 	}
+
+	if len(out) > 1 && pointsEqualWithEpsilon(out[0], out[len(out)-1], polygonCoordinateEpsilon) {
+		out = out[:len(out)-1]
+	}
+
+	if len(out) < 3 {
+		return nil
+	}
+
 	return out
+}
+
+func pointsEqualWithEpsilon(a, b domain.OFMXGeoPoint, epsilon float64) bool {
+	return math.Abs(a.Lat-b.Lat) <= epsilon && math.Abs(a.Lon-b.Lon) <= epsilon
 }
 
 func mapHeightRef(ofmxCode string) string {

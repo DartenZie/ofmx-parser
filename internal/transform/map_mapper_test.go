@@ -224,3 +224,48 @@ func TestDefaultMapMapperFiltersByConfiguredMaxAltitudeFL(t *testing.T) {
 		t.Fatalf("expected HEI1 zone to be included as above-surface, got %+v", got.Zones)
 	}
 }
+
+func TestDefaultMapMapperUsesLargestDisconnectedBorderForZonePolygon(t *testing.T) {
+	t.Parallel()
+
+	input := domain.OFMXDocument{
+		Airspaces: []domain.OFMXAirspace{
+			{ID: "ZONE1", Name: "Zone", Type: "CTR", Class: "C", LowerRef: "SFC", UpperRef: "MSL", LowerValueM: 0, UpperValueM: 1000},
+		},
+		AirspaceBorders: []domain.OFMXAirspaceBorder{
+			{AirspaceID: "ZONE1", Points: []domain.OFMXGeoPoint{{Lat: 49.0, Lon: 14.0}, {Lat: 49.01, Lon: 14.01}, {Lat: 49.0, Lon: 14.02}}},
+			{AirspaceID: "ZONE1", Points: []domain.OFMXGeoPoint{{Lat: 49.2, Lon: 14.2}, {Lat: 49.4, Lon: 14.3}, {Lat: 49.2, Lon: 14.5}}},
+		},
+	}
+
+	got, err := DefaultMapMapper{}.MapToMapDataset(context.Background(), input)
+	if err != nil {
+		t.Fatalf("map to map dataset failed: %v", err)
+	}
+
+	if len(got.Zones) != 1 {
+		t.Fatalf("expected one zone, got %+v", got.Zones)
+	}
+
+	if len(got.Zones[0].Polygon) != 3 {
+		t.Fatalf("expected polygon from one disconnected border, got %d", len(got.Zones[0].Polygon))
+	}
+
+	if got.Zones[0].Polygon[0].Lat != 49.2 {
+		t.Fatalf("expected larger disconnected border to be selected, got %+v", got.Zones[0].Polygon)
+	}
+}
+
+func TestResolveZonePolygonStitchesConnectedParts(t *testing.T) {
+	t.Parallel()
+
+	parts := [][]domain.OFMXGeoPoint{
+		{{Lat: 49.0, Lon: 14.0}, {Lat: 49.1, Lon: 14.1}, {Lat: 49.2, Lon: 14.2}},
+		{{Lat: 49.2, Lon: 14.2}, {Lat: 49.3, Lon: 14.3}, {Lat: 49.4, Lon: 14.4}},
+	}
+
+	got := resolveZonePolygon(parts)
+	if len(got) != 5 {
+		t.Fatalf("expected connected chains to stitch into 5-point polygon path, got %d", len(got))
+	}
+}

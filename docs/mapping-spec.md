@@ -121,7 +121,8 @@ Horizontal geometry:
   - If either anchor does not snap within tolerance, frontier expansion is skipped, a warning is emitted, and the original FNT coordinate is kept.
   - Consecutive duplicate coordinates are removed using coordinate epsilon.
   - Missing `Gbr` emits a structured warning and falls back to the original frontier coordinate.
-- Duplicate points are removed.
+- Polygon normalization removes only consecutive duplicate points and an explicit closing duplicate (`last == first`).
+  Non-consecutive repeated points are preserved to avoid changing intended shape topology.
 - `BBox` is computed from polygon min/max coordinates.
 - Airspaces with fewer than 3 unique points are omitted from output.
 
@@ -157,6 +158,6 @@ Map export mapping (`OFMX -> map dataset -> GeoJSON -> PMTiles`) is specified in
 Implemented map dataset entities:
 
 - airports point layer,
-- zones polygon layer,
+- zones polygon layer (stitches connected `Abd` border parts per airspace; when disconnected rings exist, selects the largest ring for polygon export),
 - points-of-interest point layer (navaids, designated points, obstacles),
 - deduplicated airspace border line layer.

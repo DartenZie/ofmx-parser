@@ -631,3 +631,28 @@ func TestFileReaderReadMapsCircleBorder(t *testing.T) {
 		t.Fatalf("expected closed circle ring, first=%+v last=%+v", pts[0], pts[len(pts)-1])
 	}
 }
+
+func TestFileReaderReadRespectsCancelledContext(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	inputPath := filepath.Join(tmpDir, "snapshot_cancel.ofmx")
+
+	input := `<?xml version="1.0" encoding="UTF-8"?>
+<OFMX-Snapshot version="0.1.0" origin="unit-test" namespace="123e4567-e89b-12d3-a456-426614174000" created="2026-01-01T00:00:00Z" effective="2026-01-01T00:00:00Z"></OFMX-Snapshot>`
+
+	if err := os.WriteFile(inputPath, []byte(input), 0o600); err != nil {
+		t.Fatalf("write input: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := FileReader{}.Read(ctx, inputPath)
+	if err == nil {
+		t.Fatal("expected canceled context error")
+	}
+	if !strings.Contains(err.Error(), "cancel") {
+		t.Fatalf("expected cancellation context in error, got %v", err)
+	}
+}

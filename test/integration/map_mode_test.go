@@ -2,6 +2,7 @@ package integration
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,34 +10,6 @@ import (
 
 	"github.com/DartenZie/ofmx-parser/internal/app"
 )
-
-const mapModeOFMXInput = `<?xml version="1.0" encoding="UTF-8"?>
-<OFMX-Snapshot version="0.1.0" origin="unit-test" namespace="123e4567-e89b-12d3-a456-426614174000" created="2026-01-01T00:00:00Z" effective="2026-01-01T00:00:00Z">
-  <Ahp>
-    <AhpUid><codeId>LKPR</codeId></AhpUid>
-    <OrgUid><txtName>Authority</txtName></OrgUid>
-    <txtName>Prague Airport</txtName>
-    <codeType>AD</codeType>
-    <geoLat>50.100556N</geoLat>
-    <geoLong>014.262222E</geoLong>
-    <valElev>380</valElev>
-  </Ahp>
-  <Ase>
-    <AseUid><codeType>CTR</codeType><codeId>LKR1</codeId></AseUid>
-    <txtName>Restricted Area</txtName>
-    <codeClass>C</codeClass>
-    <codeDistVerLower>SFC</codeDistVerLower>
-    <valDistVerLower>0</valDistVerLower>
-    <codeDistVerUpper>MSL</codeDistVerUpper>
-    <valDistVerUpper>2450</valDistVerUpper>
-  </Ase>
-  <Abd>
-    <AbdUid><AseUid><codeType>CTR</codeType><codeId>LKR1</codeId></AseUid></AbdUid>
-    <Avx><codeType>GRC</codeType><geoLat>49.000000N</geoLat><geoLong>014.000000E</geoLong><codeDatum>WGE</codeDatum></Avx>
-    <Avx><codeType>GRC</codeType><geoLat>49.100000N</geoLat><geoLong>014.200000E</geoLong><codeDatum>WGE</codeDatum></Avx>
-    <Avx><codeType>GRC</codeType><geoLat>48.900000N</geoLat><geoLong>014.300000E</geoLong><codeDatum>WGE</codeDatum></Avx>
-  </Abd>
-</OFMX-Snapshot>`
 
 func TestAppRunMapModeStrictFailsWhenTilemakerMissing(t *testing.T) {
 	t.Parallel()
@@ -46,7 +19,7 @@ func TestAppRunMapModeStrictFailsWhenTilemakerMissing(t *testing.T) {
 	pbfPath := filepath.Join(tmpDir, "base.osm.pbf")
 	pmtilesPath := filepath.Join(tmpDir, "out.pmtiles")
 
-	if err := os.WriteFile(inputPath, []byte(mapModeOFMXInput), 0o600); err != nil {
+	if err := os.WriteFile(inputPath, []byte(fixtureInput(t, "map_mode_basic.ofmx")), 0o600); err != nil {
 		t.Fatalf("write input: %v", err)
 	}
 	if err := os.WriteFile(pbfPath, []byte("pbf"), 0o600); err != nil {
@@ -79,7 +52,7 @@ func TestAppRunMapModeGeneratesPMTilesAndRuntimeFiles(t *testing.T) {
 	argsLogPath := filepath.Join(tmpDir, "tilemaker.args.log")
 	fakeTilemakerPath := filepath.Join(tmpDir, "tilemaker-fake")
 
-	if err := os.WriteFile(inputPath, []byte(mapModeOFMXInput), 0o600); err != nil {
+	if err := os.WriteFile(inputPath, []byte(fixtureInput(t, "map_mode_basic.ofmx")), 0o600); err != nil {
 		t.Fatalf("write input: %v", err)
 	}
 	if err := os.WriteFile(pbfPath, []byte("pbf"), 0o600); err != nil {
@@ -138,7 +111,7 @@ func TestAppRunDualModeGeneratesXMLAndPMTiles(t *testing.T) {
 	argsLogPath := filepath.Join(tmpDir, "tilemaker.args.log")
 	fakeTilemakerPath := filepath.Join(tmpDir, "tilemaker-fake")
 
-	if err := os.WriteFile(inputPath, []byte(mapModeOFMXInput), 0o600); err != nil {
+	if err := os.WriteFile(inputPath, []byte(fixtureInput(t, "map_mode_basic.ofmx")), 0o600); err != nil {
 		t.Fatalf("write input: %v", err)
 	}
 	if err := os.WriteFile(pbfPath, []byte("pbf"), 0o600); err != nil {
@@ -178,7 +151,7 @@ func TestAppRunMapModeRespectsCustomTilemakerConfigAndProcess(t *testing.T) {
 	customConfigPath := filepath.Join(tmpDir, "custom.config.json")
 	customProcessPath := filepath.Join(tmpDir, "custom.process.lua")
 
-	if err := os.WriteFile(inputPath, []byte(mapModeOFMXInput), 0o600); err != nil {
+	if err := os.WriteFile(inputPath, []byte(fixtureInput(t, "map_mode_basic.ofmx")), 0o600); err != nil {
 		t.Fatalf("write input: %v", err)
 	}
 	if err := os.WriteFile(pbfPath, []byte("pbf"), 0o600); err != nil {
@@ -217,6 +190,62 @@ func TestAppRunMapModeRespectsCustomTilemakerConfigAndProcess(t *testing.T) {
 	}
 	if !strings.Contains(log, customProcessPath) {
 		t.Fatalf("expected custom process path in tilemaker args: %s", log)
+	}
+}
+
+func TestAppRunMapModeAggregatesAllAbdBordersPerAirspace(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	inputPath := filepath.Join(tmpDir, "input.ofmx")
+	pbfPath := filepath.Join(tmpDir, "base.osm.pbf")
+	pmtilesPath := filepath.Join(tmpDir, "out.pmtiles")
+	mapTempDir := filepath.Join(tmpDir, "map-runtime")
+	argsLogPath := filepath.Join(tmpDir, "tilemaker.args.log")
+	fakeTilemakerPath := filepath.Join(tmpDir, "tilemaker-fake")
+
+	if err := os.WriteFile(inputPath, []byte(fixtureInput(t, "map_multi_abd.ofmx")), 0o600); err != nil {
+		t.Fatalf("write input: %v", err)
+	}
+	if err := os.WriteFile(pbfPath, []byte("pbf"), 0o600); err != nil {
+		t.Fatalf("write pbf: %v", err)
+	}
+	if err := os.WriteFile(fakeTilemakerPath, []byte(fakeTilemakerScript(argsLogPath)), 0o755); err != nil {
+		t.Fatalf("write fake tilemaker: %v", err)
+	}
+
+	err := app.Run(context.Background(), []string{
+		"--input", inputPath,
+		"--pbf-input", pbfPath,
+		"--pmtiles-output", pmtilesPath,
+		"--tilemaker-bin", fakeTilemakerPath,
+		"--map-temp-dir", mapTempDir,
+	})
+	if err != nil {
+		t.Fatalf("map-mode run failed: %v", err)
+	}
+
+	zonesPath := filepath.Join(mapTempDir, "aviation_zones.geojson")
+	b, err := os.ReadFile(zonesPath)
+	if err != nil {
+		t.Fatalf("read zones geojson: %v", err)
+	}
+
+	var fc map[string]any
+	if err := json.Unmarshal(b, &fc); err != nil {
+		t.Fatalf("unmarshal zones geojson: %v", err)
+	}
+
+	features := fc["features"].([]any)
+	if len(features) != 1 {
+		t.Fatalf("expected one zone feature, got %d", len(features))
+	}
+
+	geometry := features[0].(map[string]any)["geometry"].(map[string]any)
+	coordinates := geometry["coordinates"].([]any)
+	ring := coordinates[0].([]any)
+	if len(ring) != 4 {
+		t.Fatalf("expected single-ring polygon with 3 points plus closure, got %d", len(ring))
 	}
 }
 

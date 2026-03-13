@@ -30,7 +30,11 @@ type MapGeoJSONWriter interface {
 type GeoJSONFileWriter struct{}
 
 // Write writes four aviation GeoJSON files to dir.
-func (w GeoJSONFileWriter) Write(_ context.Context, dataset domain.MapDataset, dir string) (domain.MapGeoJSONArtifacts, error) {
+func (w GeoJSONFileWriter) Write(ctx context.Context, dataset domain.MapDataset, dir string) (domain.MapGeoJSONArtifacts, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.MapGeoJSONArtifacts{}, domain.NewError(domain.ErrOutput, "GeoJSON write cancelled", err)
+	}
+
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return domain.MapGeoJSONArtifacts{}, domain.NewError(domain.ErrOutput, fmt.Sprintf("failed to create map temp dir %q", dir), err)
 	}
@@ -42,16 +46,16 @@ func (w GeoJSONFileWriter) Write(_ context.Context, dataset domain.MapDataset, d
 		AirspaceBordersPath:  filepath.Join(dir, airspaceBordersGeoJSONFileName),
 	}
 
-	if err := writeGeoJSON(artifacts.AirportsPath, airportsFeatureCollection(dataset.Airports)); err != nil {
+	if err := writeGeoJSON(ctx, artifacts.AirportsPath, airportsFeatureCollection(dataset.Airports)); err != nil {
 		return domain.MapGeoJSONArtifacts{}, err
 	}
-	if err := writeGeoJSON(artifacts.ZonesPath, zonesFeatureCollection(dataset.Zones)); err != nil {
+	if err := writeGeoJSON(ctx, artifacts.ZonesPath, zonesFeatureCollection(dataset.Zones)); err != nil {
 		return domain.MapGeoJSONArtifacts{}, err
 	}
-	if err := writeGeoJSON(artifacts.PointsOfInterestPath, poiFeatureCollection(dataset.PointsOfInterest)); err != nil {
+	if err := writeGeoJSON(ctx, artifacts.PointsOfInterestPath, poiFeatureCollection(dataset.PointsOfInterest)); err != nil {
 		return domain.MapGeoJSONArtifacts{}, err
 	}
-	if err := writeGeoJSON(artifacts.AirspaceBordersPath, bordersFeatureCollection(dataset.AirspaceBorders)); err != nil {
+	if err := writeGeoJSON(ctx, artifacts.AirspaceBordersPath, bordersFeatureCollection(dataset.AirspaceBorders)); err != nil {
 		return domain.MapGeoJSONArtifacts{}, err
 	}
 
@@ -222,13 +226,17 @@ func polygonCoordinates(points []domain.OFMXGeoPoint) [][]float64 {
 	return ring
 }
 
-func writeGeoJSON(path string, fc geoJSONFeatureCollection) error {
+func writeGeoJSON(ctx context.Context, path string, fc geoJSONFeatureCollection) error {
+	if err := ctx.Err(); err != nil {
+		return domain.NewError(domain.ErrOutput, "GeoJSON write cancelled", err)
+	}
+
 	b, err := json.MarshalIndent(fc, "", "  ")
 	if err != nil {
 		return domain.NewError(domain.ErrOutput, fmt.Sprintf("failed to marshal GeoJSON for %q", path), err)
 	}
 
-	if err := os.WriteFile(path, append(b, '\n'), 0o644); err != nil {
+	if err := writeFileAtomic(ctx, path, append(b, '\n'), 0o644); err != nil {
 		return domain.NewError(domain.ErrOutput, fmt.Sprintf("failed to write GeoJSON file %q", path), err)
 	}
 

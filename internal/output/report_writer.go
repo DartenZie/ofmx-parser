@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"sort"
 
 	"github.com/DartenZie/ofmx-parser/internal/domain"
@@ -21,7 +20,11 @@ type ReportWriter interface {
 type JSONReportWriter struct{}
 
 // Write serializes the parse report and writes it to disk.
-func (w JSONReportWriter) Write(_ context.Context, report domain.ParseReport, path string) error {
+func (w JSONReportWriter) Write(ctx context.Context, report domain.ParseReport, path string) error {
+	if err := ctx.Err(); err != nil {
+		return domain.NewError(domain.ErrOutput, "parse report write cancelled", err)
+	}
+
 	report.FeatureCounts = cloneSortedMap(report.FeatureCounts)
 
 	b, err := json.MarshalIndent(report, "", "  ")
@@ -29,7 +32,7 @@ func (w JSONReportWriter) Write(_ context.Context, report domain.ParseReport, pa
 		return domain.NewError(domain.ErrOutput, "failed to encode parse report", err)
 	}
 
-	if err := os.WriteFile(path, append(b, '\n'), 0o644); err != nil {
+	if err := writeFileAtomic(ctx, path, append(b, '\n'), 0o644); err != nil {
 		return domain.NewError(domain.ErrOutput, fmt.Sprintf("failed to write parse report %q", path), err)
 	}
 
