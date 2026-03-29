@@ -7,7 +7,6 @@ import "encoding/xml"
 
 type OFMXDocument struct {
 	SourcePath    string
-	RawXML        []byte
 	SnapshotMeta  OFMXSnapshotMetadata
 	FeatureCounts map[string]int
 

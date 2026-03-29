@@ -8,15 +8,29 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/DartenZie/ofmx-parser/internal/domain"
+	"gopkg.in/yaml.v3"
+)
+
+const (
+	DefaultAirspaceMaxAltitudeFL = 95
+	MinAirspaceMaxAltitudeFL     = 95
 )
 
 type CLIConfig struct {
-	InputPath  string
-	OutputPath string
-	ConfigPath string
-	ReportPath string
+	InputPath         string
+	OutputPath        string
+	ConfigPath        string
+	ReportPath        string
+	ArcMaxChordM      float64
+	PBFInputPath      string
+	PMTilesOutputPath string
+	TilemakerBin      string
+	TilemakerConfig   string
+	TilemakerProcess  string
+	MapTempDir        string
 }
 
 // ParseArgs parses CLI flags into CLIConfig and validates required arguments.
@@ -28,16 +42,30 @@ func ParseArgs(args []string) (CLIConfig, error) {
 	output := fs.String("output", "", "Path to output XML file")
 	configPath := fs.String("config", "", "Path to optional config file")
 	reportPath := fs.String("report", "", "Path to optional parse report JSON output")
+	arcMaxChord := fs.Float64("arc-max-chord-m", 750, "Maximum arc chord length in meters used when densifying OFMX arc/circle borders")
+	pbfInput := fs.String("pbf-input", "", "Path to OSM PBF input for PMTiles generation")
+	pmtilesOutput := fs.String("pmtiles-output", "", "Path to output PMTiles file")
+	tilemakerBin := fs.String("tilemaker-bin", "tilemaker", "Tilemaker executable path/name")
+	tilemakerConfig := fs.String("tilemaker-config", "", "Optional tilemaker config override")
+	tilemakerProcess := fs.String("tilemaker-process", "", "Optional tilemaker process.lua override")
+	mapTempDir := fs.String("map-temp-dir", "", "Optional map generation temporary directory")
 
 	if err := fs.Parse(args); err != nil {
 		return CLIConfig{}, domain.NewError(domain.ErrConfig, "invalid CLI arguments", err)
 	}
 
 	cfg := CLIConfig{
-		InputPath:  *input,
-		OutputPath: *output,
-		ConfigPath: *configPath,
-		ReportPath: *reportPath,
+		InputPath:         *input,
+		OutputPath:        *output,
+		ConfigPath:        *configPath,
+		ReportPath:        *reportPath,
+		ArcMaxChordM:      *arcMaxChord,
+		PBFInputPath:      *pbfInput,
+		PMTilesOutputPath: *pmtilesOutput,
+		TilemakerBin:      *tilemakerBin,
+		TilemakerConfig:   *tilemakerConfig,
+		TilemakerProcess:  *tilemakerProcess,
+		MapTempDir:        *mapTempDir,
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -53,16 +81,75 @@ func (c CLIConfig) Validate() error {
 		return domain.NewError(domain.ErrConfig, "--input is required", nil)
 	}
 
-	if c.OutputPath == "" {
-		return domain.NewError(domain.ErrConfig, "--output is required", nil)
+	if c.OutputPath == "" && c.PMTilesOutputPath == "" {
+		return domain.NewError(domain.ErrConfig, "at least one output is required: --output or --pmtiles-output", nil)
+	}
+
+	if c.ArcMaxChordM <= 0 {
+		return domain.NewError(domain.ErrConfig, "--arc-max-chord-m must be > 0", nil)
+	}
+
+	mapRequested := c.PBFInputPath != "" || c.PMTilesOutputPath != "" || c.TilemakerConfig != "" || c.TilemakerProcess != "" || c.MapTempDir != ""
+	if mapRequested {
+		if c.PBFInputPath == "" {
+			return domain.NewError(domain.ErrConfig, "--pbf-input is required when map generation is enabled", nil)
+		}
+		if c.PMTilesOutputPath == "" {
+			return domain.NewError(domain.ErrConfig, "--pmtiles-output is required when map generation is enabled", nil)
+		}
 	}
 
 	return nil
 }
 
-// FileConfig stores raw config file content for future extension.
+// FileConfig stores optional file-based configuration.
 type FileConfig struct {
-	Raw []byte
+	Transform TransformConfig `yaml:"transform" json:"transform"`
+}
+
+type TransformConfig struct {
+	Airspace AirspaceTransformConfig `yaml:"airspace" json:"airspace"`
+}
+
+type AirspaceTransformConfig struct {
+	AllowedTypes  []string `yaml:"allowed_types" json:"allowed_types"`
+	MaxAltitudeFL *int     `yaml:"max_altitude_fl" json:"max_altitude_fl"`
+}
+
+func (c *FileConfig) normalize() {
+	if len(c.Transform.Airspace.AllowedTypes) == 0 {
+		return
+	}
+
+	normalized := make([]string, 0, len(c.Transform.Airspace.AllowedTypes))
+	seen := make(map[string]struct{}, len(c.Transform.Airspace.AllowedTypes))
+	for _, raw := range c.Transform.Airspace.AllowedTypes {
+		v := strings.ToUpper(strings.TrimSpace(raw))
+		if v == "" {
+			continue
+		}
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		normalized = append(normalized, v)
+	}
+
+	c.Transform.Airspace.AllowedTypes = normalized
+}
+
+func (c FileConfig) EffectiveAirspaceMaxAltitudeFL() int {
+	if c.Transform.Airspace.MaxAltitudeFL == nil {
+		return DefaultAirspaceMaxAltitudeFL
+	}
+	return *c.Transform.Airspace.MaxAltitudeFL
+}
+
+func (c FileConfig) validate() error {
+	if c.Transform.Airspace.MaxAltitudeFL != nil && *c.Transform.Airspace.MaxAltitudeFL < MinAirspaceMaxAltitudeFL {
+		return fmt.Errorf("transform.airspace.max_altitude_fl must be >= %d", MinAirspaceMaxAltitudeFL)
+	}
+	return nil
 }
 
 // LoadFile loads a config file from disk.
@@ -72,5 +159,14 @@ func LoadFile(path string) (FileConfig, error) {
 		return FileConfig{}, domain.NewError(domain.ErrConfig, fmt.Sprintf("failed to read config file %q", path), err)
 	}
 
-	return FileConfig{Raw: b}, nil
+	var cfg FileConfig
+	if err := yaml.Unmarshal(b, &cfg); err != nil {
+		return FileConfig{}, domain.NewError(domain.ErrConfig, fmt.Sprintf("failed to parse config file %q", path), err)
+	}
+	cfg.normalize()
+	if err := cfg.validate(); err != nil {
+		return FileConfig{}, domain.NewError(domain.ErrConfig, fmt.Sprintf("invalid config file %q", path), err)
+	}
+
+	return cfg, nil
 }

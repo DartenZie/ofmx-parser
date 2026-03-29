@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OFMX-Snapshot version="0.1.0" origin="unit-test" namespace="123e4567-e89b-12d3-a456-426614174000" created="2026-01-01T00:00:00Z" effective="2026-01-01T00:00:00Z">
+  <Ahp>
+    <AhpUid><codeId>LKTB</codeId></AhpUid>
+    <OrgUid><txtName>Authority</txtName></OrgUid>
+    <txtName>Brno Airport</txtName>
+    <codeType>AD</codeType>
+    <geoLat>49.150000N</geoLat>
+    <geoLong>016.683333E</geoLong>
+    <valElev>235</valElev>
+  </Ahp>
+  <Rwy></Rwy>
+</OFMX-Snapshot>

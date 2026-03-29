@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/xml"
 	"fmt"
+	"log"
 	"math"
 	"os"
 	"strconv"
@@ -21,30 +22,90 @@ type OFMXReader interface {
 }
 
 // FileReader reads OFMX XML snapshots from filesystem paths.
-type FileReader struct{}
+type FileReader struct {
+	FrontierSnapToleranceMeters float64
+	CoordinateEpsilon           float64
+	ArcMaxChordLengthMeters     float64
+	Warningf                    func(format string, args ...any)
+}
+
+type frontierExpansionOptions struct {
+	SnapToleranceMeters float64
+	CoordinateEpsilon   float64
+	ArcMaxChordLengthM  float64
+	Warningf            func(format string, args ...any)
+}
+
+const (
+	defaultFrontierSnapToleranceMeters = 1000.0
+	defaultCoordinateEpsilon           = 1e-7
+	defaultArcMaxChordLengthMeters     = 750.0
+)
+
+func (r FileReader) frontierOptions() frontierExpansionOptions {
+	opts := frontierExpansionOptions{
+		SnapToleranceMeters: r.FrontierSnapToleranceMeters,
+		CoordinateEpsilon:   r.CoordinateEpsilon,
+		ArcMaxChordLengthM:  r.ArcMaxChordLengthMeters,
+		Warningf:            r.Warningf,
+	}
+	if opts.SnapToleranceMeters <= 0 {
+		opts.SnapToleranceMeters = defaultFrontierSnapToleranceMeters
+	}
+	if opts.CoordinateEpsilon <= 0 {
+		opts.CoordinateEpsilon = defaultCoordinateEpsilon
+	}
+	if opts.ArcMaxChordLengthM <= 0 {
+		opts.ArcMaxChordLengthM = defaultArcMaxChordLengthMeters
+	}
+	if opts.Warningf == nil {
+		opts.Warningf = log.Printf
+	}
+	return opts
+}
 
 // Read loads and parses an OFMX snapshot file.
-func (r FileReader) Read(_ context.Context, path string) (domain.OFMXDocument, error) {
+func (r FileReader) Read(ctx context.Context, path string) (domain.OFMXDocument, error) {
+
+	if err := ctx.Err(); err != nil {
+		return domain.OFMXDocument{}, domain.NewError(domain.ErrIngest, "OFMX ingest cancelled", err)
+	}
+
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return domain.OFMXDocument{}, domain.NewError(domain.ErrIngest, fmt.Sprintf("failed to read input file %q", path), err)
 	}
 
-	doc, err := parseSnapshot(b)
+	if err := ctx.Err(); err != nil {
+		return domain.OFMXDocument{}, domain.NewError(domain.ErrIngest, "OFMX ingest cancelled", err)
+	}
+
+	doc, err := parseSnapshotWithOptionsContext(ctx, b, r.frontierOptions())
 	if err != nil {
 		return domain.OFMXDocument{}, err
 	}
 
 	doc.SourcePath = path
-	doc.RawXML = b
 
 	return doc, nil
 }
 
 func parseSnapshot(raw []byte) (domain.OFMXDocument, error) {
+	return parseSnapshotWithOptionsContext(context.Background(), raw, FileReader{}.frontierOptions())
+}
+
+func parseSnapshotWithOptions(raw []byte, opts frontierExpansionOptions) (domain.OFMXDocument, error) {
+	return parseSnapshotWithOptionsContext(context.Background(), raw, opts)
+}
+
+func parseSnapshotWithOptionsContext(ctx context.Context, raw []byte, opts frontierExpansionOptions) (domain.OFMXDocument, error) {
 	dec := xml.NewDecoder(bytes.NewReader(raw))
 
 	for {
+		if err := ctx.Err(); err != nil {
+			return domain.OFMXDocument{}, domain.NewError(domain.ErrIngest, "OFMX ingest cancelled", err)
+		}
+
 		tok, err := dec.Token()
 		if err != nil {
 			return domain.OFMXDocument{}, domain.NewError(domain.ErrIngest, "failed to parse OFMX XML", err)
@@ -64,7 +125,7 @@ func parseSnapshot(raw []byte) (domain.OFMXDocument, error) {
 			return domain.OFMXDocument{}, err
 		}
 
-		doc, err := parseSnapshotContent(dec)
+		doc, err := parseSnapshotContent(ctx, dec, opts)
 		if err != nil {
 			return domain.OFMXDocument{}, err
 		}
@@ -118,15 +179,25 @@ func validateSnapshotMeta(meta domain.OFMXSnapshotMetadata) error {
 	return nil
 }
 
-func parseSnapshotContent(dec *xml.Decoder) (domain.OFMXDocument, error) {
+type featureParseState struct {
+	abds []abdXML
+	gbrs []gbrXML
+}
+
+func parseSnapshotContent(ctx context.Context, dec *xml.Decoder, opts frontierExpansionOptions) (domain.OFMXDocument, error) {
 	doc := domain.OFMXDocument{
 		FeatureCounts: make(map[string]int),
 	}
 
 	counts := make(map[string]int)
+	state := featureParseState{}
 	depth := 1
 
 	for depth > 0 {
+		if err := ctx.Err(); err != nil {
+			return domain.OFMXDocument{}, domain.NewError(domain.ErrIngest, "OFMX ingest cancelled", err)
+		}
+
 		tok, err := dec.Token()
 		if err != nil {
 			return domain.OFMXDocument{}, domain.NewError(domain.ErrIngest, "failed to read OFMX-Snapshot content", err)
@@ -136,7 +207,7 @@ func parseSnapshotContent(dec *xml.Decoder) (domain.OFMXDocument, error) {
 		case xml.StartElement:
 			if depth == 1 {
 				counts[t.Name.Local]++
-				if err := parseTopLevelFeature(dec, t, &doc); err != nil {
+				if err := parseTopLevelFeature(dec, t, &doc, &state); err != nil {
 					return domain.OFMXDocument{}, err
 				}
 				continue
@@ -147,11 +218,33 @@ func parseSnapshotContent(dec *xml.Decoder) (domain.OFMXDocument, error) {
 		}
 	}
 
+	index, err := buildGeographicalBorderIndex(state.gbrs, opts)
+	if err != nil {
+		return domain.OFMXDocument{}, err
+	}
+
+	airspaceNames := make(map[string]string, len(doc.Airspaces))
+	for _, as := range doc.Airspaces {
+		if strings.TrimSpace(as.ID) == "" {
+			continue
+		}
+		airspaceNames[as.ID] = strings.TrimSpace(as.Name)
+	}
+
+	doc.AirspaceBorders = make([]domain.OFMXAirspaceBorder, 0, len(state.abds))
+	for _, abd := range state.abds {
+		border, mapErr := mapAirspaceBorder(abd, index, airspaceNames, opts)
+		if mapErr != nil {
+			return domain.OFMXDocument{}, mapErr
+		}
+		doc.AirspaceBorders = append(doc.AirspaceBorders, border)
+	}
+
 	doc.FeatureCounts = counts
 	return doc, nil
 }
 
-func parseTopLevelFeature(dec *xml.Decoder, start xml.StartElement, doc *domain.OFMXDocument) error {
+func parseTopLevelFeature(dec *xml.Decoder, start xml.StartElement, doc *domain.OFMXDocument, state *featureParseState) error {
 	switch start.Name.Local {
 	case "Ahp":
 		var in ahpXML
@@ -246,11 +339,13 @@ func parseTopLevelFeature(dec *xml.Decoder, start xml.StartElement, doc *domain.
 		if err := dec.DecodeElement(&in, &start); err != nil {
 			return domain.NewError(domain.ErrIngest, "failed to decode Abd", err)
 		}
-		border, err := mapAirspaceBorder(in)
-		if err != nil {
-			return err
+		state.abds = append(state.abds, in)
+	case "Gbr":
+		var in gbrXML
+		if err := dec.DecodeElement(&in, &start); err != nil {
+			return domain.NewError(domain.ErrIngest, "failed to decode Gbr", err)
 		}
-		doc.AirspaceBorders = append(doc.AirspaceBorders, border)
+		state.gbrs = append(state.gbrs, in)
 	case "Obs":
 		var in obsXML
 		if err := dec.DecodeElement(&in, &start); err != nil {
@@ -377,8 +472,10 @@ type aseXML struct {
 	CodeActivity     string `xml:"codeActivity"`
 	CodeDistVerLower string `xml:"codeDistVerLower"`
 	ValDistVerLower  string `xml:"valDistVerLower"`
+	UOMDistVerLower  string `xml:"uomDistVerLower"`
 	CodeDistVerUpper string `xml:"codeDistVerUpper"`
 	ValDistVerUpper  string `xml:"valDistVerUpper"`
+	UOMDistVerUpper  string `xml:"uomDistVerUpper"`
 	TxtRmk           string `xml:"txtRmk"`
 }
 
@@ -389,10 +486,46 @@ type abdXML struct {
 			CodeID   string `xml:"codeId"`
 		} `xml:"AseUid"`
 	} `xml:"AbdUid"`
-	Vertices []struct {
-		GeoLat  string `xml:"geoLat"`
-		GeoLong string `xml:"geoLong"`
-	} `xml:"Avx"`
+	Vertices []abdVertexXML `xml:"Avx"`
+	Circle   *abdCircleXML  `xml:"Circle"`
+}
+
+type abdVertexXML struct {
+	GbrUID struct {
+		MID     string `xml:"mid,attr"`
+		TxtName string `xml:"txtName"`
+	} `xml:"GbrUid"`
+	CodeType     string `xml:"codeType"`
+	GeoLat       string `xml:"geoLat"`
+	GeoLong      string `xml:"geoLong"`
+	CodeDatum    string `xml:"codeDatum"`
+	GeoLatArc    string `xml:"geoLatArc"`
+	GeoLongArc   string `xml:"geoLongArc"`
+	ValRadiusArc string `xml:"valRadiusArc"`
+	UOMRadiusArc string `xml:"uomRadiusArc"`
+}
+
+type abdCircleXML struct {
+	GeoLatCen  string `xml:"geoLatCen"`
+	GeoLongCen string `xml:"geoLongCen"`
+	CodeDatum  string `xml:"codeDatum"`
+	ValRadius  string `xml:"valRadius"`
+	UOMRadius  string `xml:"uomRadius"`
+}
+
+type gbrXML struct {
+	GbrUID struct {
+		MID     string `xml:"mid,attr"`
+		TxtName string `xml:"txtName"`
+	} `xml:"GbrUid"`
+	Vertices []gbrVertexXML `xml:"Gbv"`
+}
+
+type gbrVertexXML struct {
+	CodeType  string `xml:"codeType"`
+	GeoLat    string `xml:"geoLat"`
+	GeoLong   string `xml:"geoLong"`
+	CodeDatum string `xml:"codeDatum"`
 }
 
 type obsXML struct {
@@ -573,19 +706,31 @@ func mapAirspace(in aseXML) domain.OFMXAirspace {
 		Class:       strings.TrimSpace(in.CodeClass),
 		Activity:    strings.TrimSpace(in.CodeActivity),
 		LowerValueM: parseFloatOrDefault(in.ValDistVerLower, 0),
-		LowerRef:    strings.TrimSpace(in.CodeDistVerLower),
+		LowerRef:    firstNonEmpty(in.CodeDistVerLower, in.UOMDistVerLower),
 		UpperValueM: parseFloatOrDefault(in.ValDistVerUpper, 0),
-		UpperRef:    strings.TrimSpace(in.CodeDistVerUpper),
+		UpperRef:    firstNonEmpty(in.CodeDistVerUpper, in.UOMDistVerUpper),
 		Remark:      strings.TrimSpace(in.TxtRmk),
 	}
 }
 
-func mapAirspaceBorder(in abdXML) (domain.OFMXAirspaceBorder, error) {
+func mapAirspaceBorder(in abdXML, borderIndex geographicalBorderIndex, airspaceNames map[string]string, opts frontierExpansionOptions) (domain.OFMXAirspaceBorder, error) {
 	out := domain.OFMXAirspaceBorder{
 		AirspaceID: strings.TrimSpace(in.AbdUid.AseUid.CodeID),
 		Points:     make([]domain.OFMXGeoPoint, 0, len(in.Vertices)),
 	}
+	if in.Circle != nil {
+		circlePoints, err := expandCircularBorder(*in.Circle, opts)
+		if err != nil {
+			return domain.OFMXAirspaceBorder{}, domain.NewError(domain.ErrIngest, fmt.Sprintf("failed to map circular Abd border for airspace %q", out.AirspaceID), err)
+		}
+		out.Points = append(out.Points, circlePoints...)
+		return out, nil
+	}
+	if len(in.Vertices) == 0 {
+		return out, nil
+	}
 
+	parsedVertices := make([]airspaceVertex, 0, len(in.Vertices))
 	for _, v := range in.Vertices {
 		lat, err := parseCoordinate(v.GeoLat, true)
 		if err != nil {
@@ -595,7 +740,75 @@ func mapAirspaceBorder(in abdXML) (domain.OFMXAirspaceBorder, error) {
 		if err != nil {
 			return domain.OFMXAirspaceBorder{}, domain.NewError(domain.ErrIngest, "failed to parse Abd vertex longitude", err)
 		}
-		out.Points = append(out.Points, domain.OFMXGeoPoint{Lat: lat, Lon: lon})
+		parsedVertices = append(parsedVertices, airspaceVertex{
+			Point:      domain.OFMXGeoPoint{Lat: lat, Lon: lon},
+			CodeType:   strings.ToUpper(strings.TrimSpace(v.CodeType)),
+			CodeDatum:  strings.ToUpper(strings.TrimSpace(v.CodeDatum)),
+			GbrMID:     strings.TrimSpace(v.GbrUID.MID),
+			GbrTxtName: strings.TrimSpace(v.GbrUID.TxtName),
+		})
+
+		if strings.TrimSpace(v.GeoLatArc) != "" && strings.TrimSpace(v.GeoLongArc) != "" {
+			arcLat, err := parseCoordinate(v.GeoLatArc, true)
+			if err != nil {
+				return domain.OFMXAirspaceBorder{}, domain.NewError(domain.ErrIngest, "failed to parse Abd arc center latitude", err)
+			}
+			arcLon, err := parseCoordinate(v.GeoLongArc, false)
+			if err != nil {
+				return domain.OFMXAirspaceBorder{}, domain.NewError(domain.ErrIngest, "failed to parse Abd arc center longitude", err)
+			}
+
+			parsedVertices[len(parsedVertices)-1].ArcCenter = &domain.OFMXGeoPoint{Lat: arcLat, Lon: arcLon}
+		}
+
+		if radiusM, ok := parseHorizontalDistanceMeters(v.ValRadiusArc, v.UOMRadiusArc); ok {
+			parsedVertices[len(parsedVertices)-1].ArcRadiusM = radiusM
+		}
+	}
+
+	for i, v := range parsedVertices {
+		if v.CodeType != "FNT" {
+			if (v.CodeType == "CWA" || v.CodeType == "CCA") && v.ArcCenter != nil {
+				next := parsedVertices[(i+1)%len(parsedVertices)].Point
+				expandedArc := expandArcSegment(v.Point, next, *v.ArcCenter, v.CodeType, v.ArcRadiusM, opts)
+				if len(expandedArc) > 0 {
+					for _, p := range expandedArc {
+						out.Points = appendPointUnique(out.Points, p, opts.CoordinateEpsilon)
+					}
+					continue
+				}
+			}
+
+			out.Points = appendPointUnique(out.Points, v.Point, opts.CoordinateEpsilon)
+			continue
+		}
+
+		gbrPoints, ok := borderIndex.find(v.GbrMID, v.GbrTxtName)
+		if !ok {
+			opts.Warningf("OFMX frontier warning airspace_id=%q airspace_name=%q missing_border_uid=%q missing_border_name=%q", out.AirspaceID, strings.TrimSpace(airspaceNames[out.AirspaceID]), v.GbrMID, v.GbrTxtName)
+			out.Points = appendPointUnique(out.Points, v.Point, opts.CoordinateEpsilon)
+			continue
+		}
+
+		next := parsedVertices[(i+1)%len(parsedVertices)].Point
+		expanded, startProjection, stopProjection, ok := expandFrontierSegment(gbrPoints, v.Point, next, opts)
+		if !ok || len(expanded) == 0 {
+			opts.Warningf(
+				"OFMX frontier warning airspace_id=%q airspace_name=%q border_uid=%q border_name=%q expansion_skipped=snap_failed start_distance_m=%.1f stop_distance_m=%.1f snap_tolerance_m=%.1f",
+				out.AirspaceID,
+				strings.TrimSpace(airspaceNames[out.AirspaceID]),
+				v.GbrMID,
+				v.GbrTxtName,
+				startProjection.DistanceM,
+				stopProjection.DistanceM,
+				opts.SnapToleranceMeters,
+			)
+			out.Points = appendPointUnique(out.Points, v.Point, opts.CoordinateEpsilon)
+			continue
+		}
+		for _, p := range expanded {
+			out.Points = appendPointUnique(out.Points, p, opts.CoordinateEpsilon)
+		}
 	}
 
 	return out, nil

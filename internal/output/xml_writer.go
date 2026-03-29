@@ -8,7 +8,6 @@ import (
 	"context"
 	"encoding/xml"
 	"fmt"
-	"os"
 
 	"github.com/DartenZie/ofmx-parser/internal/domain"
 )
@@ -21,12 +20,11 @@ type XMLWriter interface {
 type XMLFileWriter struct{}
 
 // Write serializes a domain output document to XML and writes it to path.
-func (w XMLFileWriter) Write(_ context.Context, doc domain.OutputDocument, path string) error {
-	f, err := os.Create(path)
-	if err != nil {
-		return domain.NewError(domain.ErrOutput, fmt.Sprintf("failed to create output file %q", path), err)
+func (w XMLFileWriter) Write(ctx context.Context, doc domain.OutputDocument, path string) error {
+
+	if err := ctx.Err(); err != nil {
+		return domain.NewError(domain.ErrOutput, "output XML write cancelled", err)
 	}
-	defer f.Close()
 
 	buf := bytes.NewBufferString(xml.Header)
 	enc := xml.NewEncoder(buf)
@@ -40,7 +38,7 @@ func (w XMLFileWriter) Write(_ context.Context, doc domain.OutputDocument, path 
 		return domain.NewError(domain.ErrOutput, "failed to flush XML encoder", err)
 	}
 
-	if _, err := f.Write(buf.Bytes()); err != nil {
+	if err := writeFileAtomic(ctx, path, buf.Bytes(), 0o644); err != nil {
 		return domain.NewError(domain.ErrOutput, fmt.Sprintf("failed to write output file %q", path), err)
 	}
 

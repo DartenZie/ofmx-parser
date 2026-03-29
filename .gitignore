@@ -13,3 +13,10 @@ coverage.out
 
 # OS
 .DS_Store
+
+cz.osm.pbf
+cz.ofmx
+cz.pmtiles
+cz.xml
+ofmx_lk.ofmx
+lk.xml
