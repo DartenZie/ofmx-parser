@@ -80,6 +80,7 @@ func TestAppRunMapModeGeneratesPMTilesAndRuntimeFiles(t *testing.T) {
 		filepath.Join(mapTempDir, "aviation_zones.geojson"),
 		filepath.Join(mapTempDir, "aviation_poi.geojson"),
 		filepath.Join(mapTempDir, "aviation_airspace_borders.geojson"),
+		filepath.Join(mapTempDir, "countries_boundary.geojson"),
 		filepath.Join(mapTempDir, "tilemaker.generated.config.json"),
 		filepath.Join(mapTempDir, "tilemaker.generated.process.lua"),
 	} {

@@ -17,78 +17,57 @@ Status: implemented through milestones M5.1-M5.8.
 
 ## 3. OpenMapTiles-Derived Layer Contract
 
-The following style-targeted layers are required.
+The following OpenMapTiles-compatible source layers are produced by the embedded
+tilemaker Lua/JSON configuration. Each layer carries a `class` attribute (and
+additional filter attributes where noted) so the map style can filter features
+at render time.
 
-### 3.1 Land and Water
+### 3.1 landuse
 
-- `landuse-residential`
-  - source vector layer: `landuse`
-  - filter: `class = residential`
-  - geometry: Polygon
+- geometry: Polygon
+- attributes: `class` (string)
+- included classes: `residential`
+- minzoom: 6
+- simplification: geometry simplified below z10; tiny polygons filtered below z10
 
-- `landcover_grass`
-  - source vector layer: `landcover`
-  - filter: `class = grass`
-  - geometry: Polygon
+### 3.2 landcover
 
-- `landcover_wood`
-  - source vector layer: `landcover`
-  - filter: `class = wood`
-  - geometry: Polygon
+- geometry: Polygon
+- attributes: `class` (string)
+- included classes: `grass`, `wood`
+- minzoom: 6
+- simplification: geometry simplified below z10; tiny polygons filtered below z10
 
-- `water`
-  - source vector layer: `water`
-  - filter: base water features (`class`-driven)
-  - geometry: Polygon
+### 3.3 water
 
-- `water_intermittent`
-  - source vector layer: `water`
-  - filter: `intermittent = 1`
-  - geometry: Polygon
+- geometry: Polygon
+- attributes: `intermittent` (integer, 0 or 1), `brunnel` (string, optional)
+- minzoom: 6
+- simplification: geometry simplified below z10; tiny polygons filtered below z10
 
-- `waterway`
-  - source vector layer: `waterway`
-  - filter: all linear waterways
-  - geometry: LineString
+### 3.4 waterway
 
-- `waterway-tunnel`
-  - source vector layer: `waterway`
-  - filter: `brunnel = tunnel`
-  - geometry: LineString
+- geometry: LineString
+- attributes: `intermittent` (integer, 0 or 1), `brunnel` (string, optional)
+- minzoom: 8
+- simplification: geometry simplified below z10
 
-- `waterway_intermittent`
-  - source vector layer: `waterway`
-  - filter: `intermittent = 1`
-  - geometry: LineString
+### 3.5 transportation
 
-### 3.2 Roads
+- geometry: LineString
+- attributes: `class` (string)
+- included classes: `motorway`, `trunk`, `primary`, `secondary`, `tertiary`
+- minzoom: 5
+- simplification: geometry simplified below z10
+- per-feature MinZoom: `motorway` z5, `trunk`/`primary` z7, `secondary` z9, `tertiary` z10
 
-- `road_major_motorway`
-  - source vector layer: `transportation`
-  - filter: `class = motorway`
-  - geometry: LineString
+### 3.6 place
 
-- `road_trunk_primary`
-  - source vector layer: `transportation`
-  - filter: `class IN {trunk, primary}`
-  - geometry: LineString
-
-- `road_secondary_tertiary`
-  - source vector layer: `transportation`
-  - filter: `class IN {secondary, tertiary}`
-  - geometry: LineString
-
-### 3.3 Place Labels
-
-- `place_label_city`
-  - source vector layer: `place`
-  - filter: `class IN {city, town}`
-  - geometry: Point
-
-- `place_label_other`
-  - source vector layer: `place`
-  - filter: `class IN {village, hamlet, suburb, quarter, neighbourhood, locality}`
-  - geometry: Point
+- geometry: Point
+- attributes: `class` (string), `name` (string)
+- included classes: `city`, `town`, `village`, `hamlet`, `suburb`, `quarter`, `neighbourhood`, `locality`
+- minzoom: 5
+- per-feature MinZoom: `city` z5, `town` z7, `village`/`suburb` z9, `hamlet`/`quarter`/`neighbourhood`/`locality` z10
 
 ## 4. Aviation Overlay Layers
 
@@ -142,7 +121,17 @@ The following style-targeted layers are required.
   - `edge_id` (string, deterministic)
   - `zone_a` (string)
   - `zone_b` (string, optional when edge is non-shared)
+  - `zone_type` (string; type of `zone_a`)
   - `shared` (boolean)
+
+### 4.5 countries_boundary
+
+- geometry: LineString
+- source: OFMX `Gbr` (geographical border) features
+- includes all parsed `Gbr` borders with at least two valid `WGE` points
+- mandatory attributes:
+  - `uid` (string)
+  - `name` (string)
 
 ## 5. Shared Border Rule (Normative)
 

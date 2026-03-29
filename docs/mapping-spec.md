@@ -160,4 +160,5 @@ Implemented map dataset entities:
 - airports point layer,
 - zones polygon layer (stitches connected `Abd` border parts per airspace; when disconnected rings exist, selects the largest ring for polygon export),
 - points-of-interest point layer (navaids, designated points, obstacles),
-- deduplicated airspace border line layer.
+- deduplicated airspace border line layer (includes `zone_type` derived from `zone_a`),
+- country boundary line layer from parsed `Gbr` features (all parsed borders with at least two valid points).

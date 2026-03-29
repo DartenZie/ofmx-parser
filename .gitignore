@@ -1,6 +1,7 @@
 # Binaries
 bin/
 dist/
+tmp/
 
 # Go build/test artifacts
 *.test

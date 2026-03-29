@@ -101,6 +101,10 @@ func TestDefaultMapMapperMapsZonesAndBorders(t *testing.T) {
 				Points:     []domain.OFMXGeoPoint{{Lat: 0, Lon: 1}, {Lat: 0, Lon: 2}, {Lat: 1, Lon: 2}, {Lat: 1, Lon: 1}},
 			},
 		},
+		CountryBorders: []domain.OFMXGeographicalBorder{
+			{UID: "CB-2", Name: "CZ-PL", Points: []domain.OFMXGeoPoint{{Lat: 50.0, Lon: 15.0}, {Lat: 50.1, Lon: 15.1}}},
+			{UID: "CB-1", Name: "CZ-DE", Points: []domain.OFMXGeoPoint{{Lat: 49.0, Lon: 14.0}, {Lat: 49.1, Lon: 14.1}}},
+		},
 	}
 
 	got, err := DefaultMapMapper{}.MapToMapDataset(context.Background(), input)
@@ -122,6 +126,23 @@ func TestDefaultMapMapperMapsZonesAndBorders(t *testing.T) {
 
 	if len(got.PointsOfInterest) != 2 {
 		t.Fatalf("expected 2 points of interest, got %d", len(got.PointsOfInterest))
+	}
+
+	seenTypes := map[string]bool{}
+	for _, border := range got.AirspaceBorders {
+		if border.ZoneType != "" {
+			seenTypes[border.ZoneType] = true
+		}
+	}
+	if !seenTypes["CTR"] || !seenTypes["TMA"] {
+		t.Fatalf("expected zone types CTR and TMA on borders, got %+v", got.AirspaceBorders)
+	}
+
+	if len(got.CountryBorders) != 2 {
+		t.Fatalf("expected 2 country borders, got %d", len(got.CountryBorders))
+	}
+	if got.CountryBorders[0].UID != "CB-1" {
+		t.Fatalf("expected country boundaries sorted by UID, got %+v", got.CountryBorders)
 	}
 }
 

@@ -15,10 +15,11 @@ type MapExportRequest struct {
 
 // MapGeoJSONArtifacts contains produced GeoJSON source file paths.
 type MapGeoJSONArtifacts struct {
-	AirportsPath         string
-	ZonesPath            string
-	PointsOfInterestPath string
-	AirspaceBordersPath  string
+	AirportsPath          string
+	ZonesPath             string
+	PointsOfInterestPath  string
+	AirspaceBordersPath   string
+	CountriesBoundaryPath string
 }
 
 // MapDataset is a map-oriented intermediate model for PMTiles export.
@@ -27,6 +28,7 @@ type MapDataset struct {
 	Zones            []MapZonePolygon
 	PointsOfInterest []MapPOI
 	AirspaceBorders  []MapBorderLine
+	CountryBorders   []MapCountryBoundary
 }
 
 // MapAirportPoint is the map representation of one airport.
@@ -64,9 +66,17 @@ type MapPOI struct {
 
 // MapBorderLine is one rendered airspace border segment.
 type MapBorderLine struct {
-	EdgeID string
-	ZoneA  string
-	ZoneB  string
-	Shared bool
-	Line   []OFMXGeoPoint
+	EdgeID   string
+	ZoneA    string
+	ZoneB    string
+	ZoneType string
+	Shared   bool
+	Line     []OFMXGeoPoint
+}
+
+// MapCountryBoundary is one rendered country boundary polyline.
+type MapCountryBoundary struct {
+	UID  string
+	Name string
+	Line []OFMXGeoPoint
 }

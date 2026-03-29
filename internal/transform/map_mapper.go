@@ -33,6 +33,7 @@ func (m DefaultMapMapper) MapToMapDataset(_ context.Context, input domain.OFMXDo
 		Zones:            make([]domain.MapZonePolygon, 0, len(input.Airspaces)),
 		PointsOfInterest: make([]domain.MapPOI, 0, len(input.VORs)+len(input.NDBs)+len(input.DMEs)+len(input.TACANs)+len(input.Markers)+len(input.DesignatedPoints)+len(input.Obstacles)),
 		AirspaceBorders:  make([]domain.MapBorderLine, 0),
+		CountryBorders:   make([]domain.MapCountryBoundary, 0, len(input.CountryBorders)),
 	}
 
 	for _, ap := range input.Airports {
@@ -59,6 +60,7 @@ func (m DefaultMapMapper) MapToMapDataset(_ context.Context, input domain.OFMXDo
 	}
 
 	allowedAirspaceIDs := make(map[string]struct{}, len(input.Airspaces))
+	airspaceTypeByID := make(map[string]string, len(input.Airspaces))
 	for _, as := range input.Airspaces {
 		if !passesAirspaceFilters(as, allowedTypes, maxLowerFL) {
 			continue
@@ -70,6 +72,7 @@ func (m DefaultMapMapper) MapToMapDataset(_ context.Context, input domain.OFMXDo
 		}
 
 		allowedAirspaceIDs[as.ID] = struct{}{}
+		airspaceTypeByID[as.ID] = as.Type
 		upValue := as.UpperValueM
 		if upValue == 0 {
 			upValue = as.LowerValueM
@@ -93,6 +96,29 @@ func (m DefaultMapMapper) MapToMapDataset(_ context.Context, input domain.OFMXDo
 	})
 
 	dataset.AirspaceBorders = dedupeAirspaceBorders(filterAirspaceBordersByID(input.AirspaceBorders, allowedAirspaceIDs))
+	for i := range dataset.AirspaceBorders {
+		zoneA := dataset.AirspaceBorders[i].ZoneA
+		dataset.AirspaceBorders[i].ZoneType = airspaceTypeByID[zoneA]
+	}
+
+	for _, border := range input.CountryBorders {
+		if len(border.Points) < 2 {
+			continue
+		}
+
+		dataset.CountryBorders = append(dataset.CountryBorders, domain.MapCountryBoundary{
+			UID:  border.UID,
+			Name: border.Name,
+			Line: append([]domain.OFMXGeoPoint(nil), border.Points...),
+		})
+	}
+
+	sort.Slice(dataset.CountryBorders, func(i, j int) bool {
+		if dataset.CountryBorders[i].UID == dataset.CountryBorders[j].UID {
+			return dataset.CountryBorders[i].Name < dataset.CountryBorders[j].Name
+		}
+		return dataset.CountryBorders[i].UID < dataset.CountryBorders[j].UID
+	})
 
 	for _, v := range input.VORs {
 		dataset.PointsOfInterest = append(dataset.PointsOfInterest, domain.MapPOI{ID: v.ID, Kind: "VOR", Name: firstNonEmpty(v.Name, v.ID), Lat: v.Lat, Lon: v.Lon})

@@ -21,6 +21,7 @@ type OFMXDocument struct {
 	DesignatedPoints []OFMXDesignatedPoint
 	Airspaces        []OFMXAirspace
 	AirspaceBorders  []OFMXAirspaceBorder
+	CountryBorders   []OFMXGeographicalBorder
 	Obstacles        []OFMXObstacle
 }
 
@@ -263,6 +264,13 @@ type OFMXAirspace struct {
 type OFMXAirspaceBorder struct {
 	AirspaceID string
 	Points     []OFMXGeoPoint
+}
+
+// OFMXGeographicalBorder represents one parsed geographical border (Gbr).
+type OFMXGeographicalBorder struct {
+	UID    string
+	Name   string
+	Points []OFMXGeoPoint
 }
 
 // OFMXGeoPoint is a geographic point in decimal degrees.

@@ -20,6 +20,7 @@ func TestGeoJSONFileWriterWriteCreatesAllGeoJSONFiles(t *testing.T) {
 		}},
 		PointsOfInterest: []domain.MapPOI{{ID: "VLM", Kind: "VOR", Name: "VLM", Lat: 50.2, Lon: 14.4}},
 		AirspaceBorders:  []domain.MapBorderLine{{EdgeID: "E_1", ZoneA: "LKR1", Shared: false, Line: []domain.OFMXGeoPoint{{Lat: 49, Lon: 14}, {Lat: 49.1, Lon: 14.2}}}},
+		CountryBorders:   []domain.MapCountryBoundary{{UID: "BORDER-1", Name: "CZ-DE", Line: []domain.OFMXGeoPoint{{Lat: 49, Lon: 14}, {Lat: 49.1, Lon: 14.2}}}},
 	}
 
 	dir := t.TempDir()
@@ -28,11 +29,77 @@ func TestGeoJSONFileWriterWriteCreatesAllGeoJSONFiles(t *testing.T) {
 		t.Fatalf("write geojson failed: %v", err)
 	}
 
-	paths := []string{artifacts.AirportsPath, artifacts.ZonesPath, artifacts.PointsOfInterestPath, artifacts.AirspaceBordersPath}
+	paths := []string{artifacts.AirportsPath, artifacts.ZonesPath, artifacts.PointsOfInterestPath, artifacts.AirspaceBordersPath, artifacts.CountriesBoundaryPath}
 	for _, path := range paths {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("expected file %q to exist: %v", path, err)
 		}
+	}
+}
+
+func TestGeoJSONFileWriterWriteSortsCountryBoundariesByUID(t *testing.T) {
+	t.Parallel()
+
+	dataset := domain.MapDataset{
+		CountryBorders: []domain.MapCountryBoundary{
+			{UID: "ZZ", Name: "Z", Line: []domain.OFMXGeoPoint{{Lat: 1, Lon: 1}, {Lat: 1.1, Lon: 1.1}}},
+			{UID: "AA", Name: "A", Line: []domain.OFMXGeoPoint{{Lat: 2, Lon: 2}, {Lat: 2.1, Lon: 2.1}}},
+		},
+	}
+
+	artifacts, err := (GeoJSONFileWriter{}).Write(context.Background(), dataset, t.TempDir())
+	if err != nil {
+		t.Fatalf("write geojson failed: %v", err)
+	}
+
+	b, err := os.ReadFile(artifacts.CountriesBoundaryPath)
+	if err != nil {
+		t.Fatalf("read countries boundary file failed: %v", err)
+	}
+
+	var fc map[string]any
+	if err := json.Unmarshal(b, &fc); err != nil {
+		t.Fatalf("unmarshal countries boundary geojson failed: %v", err)
+	}
+
+	features := fc["features"].([]any)
+	firstUID := features[0].(map[string]any)["properties"].(map[string]any)["uid"].(string)
+	if firstUID != "AA" {
+		t.Fatalf("expected first country boundary uid AA after sorting, got %q", firstUID)
+	}
+}
+
+func TestGeoJSONFileWriterWriteIncludesZoneTypeOnAirspaceBorders(t *testing.T) {
+	t.Parallel()
+
+	dataset := domain.MapDataset{
+		AirspaceBorders: []domain.MapBorderLine{{
+			EdgeID:   "E_1",
+			ZoneA:    "A",
+			ZoneType: "ATZ",
+			Line:     []domain.OFMXGeoPoint{{Lat: 49, Lon: 14}, {Lat: 49.1, Lon: 14.1}},
+		}},
+	}
+
+	artifacts, err := (GeoJSONFileWriter{}).Write(context.Background(), dataset, t.TempDir())
+	if err != nil {
+		t.Fatalf("write geojson failed: %v", err)
+	}
+
+	b, err := os.ReadFile(artifacts.AirspaceBordersPath)
+	if err != nil {
+		t.Fatalf("read borders file failed: %v", err)
+	}
+
+	var fc map[string]any
+	if err := json.Unmarshal(b, &fc); err != nil {
+		t.Fatalf("unmarshal borders geojson failed: %v", err)
+	}
+
+	features := fc["features"].([]any)
+	zoneType := features[0].(map[string]any)["properties"].(map[string]any)["zone_type"].(string)
+	if zoneType != "ATZ" {
+		t.Fatalf("expected border zone_type ATZ, got %q", zoneType)
 	}
 }
 

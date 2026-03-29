@@ -223,6 +223,18 @@ func parseSnapshotContent(ctx context.Context, dec *xml.Decoder, opts frontierEx
 		return domain.OFMXDocument{}, err
 	}
 
+	doc.CountryBorders = make([]domain.OFMXGeographicalBorder, 0, len(state.gbrs))
+	for _, gbr := range state.gbrs {
+		border, mapErr := mapGeographicalBorder(gbr, opts)
+		if mapErr != nil {
+			return domain.OFMXDocument{}, mapErr
+		}
+		if len(border.Points) < 2 {
+			continue
+		}
+		doc.CountryBorders = append(doc.CountryBorders, border)
+	}
+
 	airspaceNames := make(map[string]string, len(doc.Airspaces))
 	for _, as := range doc.Airspaces {
 		if strings.TrimSpace(as.ID) == "" {
@@ -711,6 +723,35 @@ func mapAirspace(in aseXML) domain.OFMXAirspace {
 		UpperRef:    firstNonEmpty(in.CodeDistVerUpper, in.UOMDistVerUpper),
 		Remark:      strings.TrimSpace(in.TxtRmk),
 	}
+}
+
+func mapGeographicalBorder(in gbrXML, opts frontierExpansionOptions) (domain.OFMXGeographicalBorder, error) {
+	out := domain.OFMXGeographicalBorder{
+		UID:    strings.TrimSpace(in.GbrUID.MID),
+		Name:   strings.TrimSpace(in.GbrUID.TxtName),
+		Points: make([]domain.OFMXGeoPoint, 0, len(in.Vertices)),
+	}
+
+	for _, v := range in.Vertices {
+		datum := strings.ToUpper(strings.TrimSpace(v.CodeDatum))
+		if datum != "" && datum != "WGE" {
+			opts.Warningf("OFMX Gbr warning skipped_non_wge_vertex border_uid=%q border_name=%q datum=%q", out.UID, out.Name, datum)
+			continue
+		}
+
+		lat, err := parseCoordinate(v.GeoLat, true)
+		if err != nil {
+			return domain.OFMXGeographicalBorder{}, domain.NewError(domain.ErrIngest, fmt.Sprintf("failed to parse Gbr vertex latitude for %q", firstNonEmpty(out.UID, out.Name)), err)
+		}
+		lon, err := parseCoordinate(v.GeoLong, false)
+		if err != nil {
+			return domain.OFMXGeographicalBorder{}, domain.NewError(domain.ErrIngest, fmt.Sprintf("failed to parse Gbr vertex longitude for %q", firstNonEmpty(out.UID, out.Name)), err)
+		}
+
+		out.Points = appendPointUnique(out.Points, domain.OFMXGeoPoint{Lat: lat, Lon: lon}, opts.CoordinateEpsilon)
+	}
+
+	return out, nil
 }
 
 func mapAirspaceBorder(in abdXML, borderIndex geographicalBorderIndex, airspaceNames map[string]string, opts frontierExpansionOptions) (domain.OFMXAirspaceBorder, error) {

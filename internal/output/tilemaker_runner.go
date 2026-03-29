@@ -19,6 +19,8 @@ const (
 	defaultTilemakerBin  = "tilemaker"
 	generatedConfigName  = "tilemaker.generated.config.json"
 	generatedProcessName = "tilemaker.generated.process.lua"
+	defaultConfigsDir    = "configs"
+	defaultProcessName   = "tilemaker.process.lua"
 	mapLayersMaxZoom     = 10
 	mapLayersBaseZoom    = 10
 	mapLayersMinZoom     = 5
@@ -100,39 +102,109 @@ func generateTilemakerRuntimeFiles(dir string, artifacts domain.MapGeoJSONArtifa
 		return "", "", domain.NewError(domain.ErrOutput, fmt.Sprintf("failed to write tilemaker config %q", configPath), err)
 	}
 
-	if err := os.WriteFile(processPath, []byte(tilemakerProcessLua), 0o644); err != nil {
+	processContent, err := loadDefaultTilemakerProcessLua()
+	if err != nil {
+		return "", "", err
+	}
+
+	if err := os.WriteFile(processPath, processContent, 0o644); err != nil {
 		return "", "", domain.NewError(domain.ErrOutput, fmt.Sprintf("failed to write tilemaker process file %q", processPath), err)
 	}
 
 	return configPath, processPath, nil
 }
 
+func loadDefaultTilemakerProcessLua() ([]byte, error) {
+	processTemplatePath, err := resolveConfigPath(defaultProcessName)
+	if err != nil {
+		return nil, domain.NewError(domain.ErrOutput, "failed to resolve default tilemaker process.lua template", err)
+	}
+
+	processContent, err := os.ReadFile(processTemplatePath)
+	if err != nil {
+		return nil, domain.NewError(domain.ErrOutput, fmt.Sprintf("failed to read default tilemaker process template %q", processTemplatePath), err)
+	}
+
+	return processContent, nil
+}
+
+func resolveConfigPath(name string) (string, error) {
+	relativePath := filepath.Join(defaultConfigsDir, name)
+	if _, err := os.Stat(relativePath); err == nil {
+		return relativePath, nil
+	}
+
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+
+	for dir := wd; ; dir = filepath.Dir(dir) {
+		candidate := filepath.Join(dir, relativePath)
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate, nil
+		}
+
+		parentDir := filepath.Dir(dir)
+		if parentDir == dir {
+			break
+		}
+	}
+
+	return "", fmt.Errorf("unable to locate %q from %q", relativePath, wd)
+}
+
 func buildTilemakerConfigJSON(artifacts domain.MapGeoJSONArtifacts) ([]byte, error) {
 	type layerConfig struct {
-		MinZoom int    `json:"minzoom"`
-		MaxZoom int    `json:"maxzoom"`
-		Source  string `json:"source,omitempty"`
+		MinZoom       int     `json:"minzoom"`
+		MaxZoom       int     `json:"maxzoom"`
+		Source        string  `json:"source,omitempty"`
+		SourceColumns bool    `json:"source_columns,omitempty"`
+		SimplifyBelow int     `json:"simplify_below,omitempty"`
+		SimplifyLevel float64 `json:"simplify_level,omitempty"`
+		FilterBelow   int     `json:"filter_below,omitempty"`
+		FilterArea    float64 `json:"filter_area,omitempty"`
 	}
 
 	config := map[string]any{
 		"layers": map[string]layerConfig{
-			"landuse-residential":       {MinZoom: 6, MaxZoom: mapLayersMaxZoom},
-			"landcover_grass":           {MinZoom: 6, MaxZoom: mapLayersMaxZoom},
-			"landcover_wood":            {MinZoom: 6, MaxZoom: mapLayersMaxZoom},
-			"water":                     {MinZoom: 6, MaxZoom: mapLayersMaxZoom},
-			"water_intermittent":        {MinZoom: 8, MaxZoom: mapLayersMaxZoom},
-			"waterway":                  {MinZoom: 8, MaxZoom: mapLayersMaxZoom},
-			"waterway-tunnel":           {MinZoom: 10, MaxZoom: mapLayersMaxZoom},
-			"waterway_intermittent":     {MinZoom: 10, MaxZoom: mapLayersMaxZoom},
-			"road_major_motorway":       {MinZoom: 5, MaxZoom: mapLayersMaxZoom},
-			"road_trunk_primary":        {MinZoom: 7, MaxZoom: mapLayersMaxZoom},
-			"road_secondary_tertiary":   {MinZoom: 9, MaxZoom: mapLayersMaxZoom},
-			"place_label_city":          {MinZoom: 5, MaxZoom: mapLayersMaxZoom},
-			"place_label_other":         {MinZoom: 9, MaxZoom: mapLayersMaxZoom},
-			"aviation_airports":         {MinZoom: 6, MaxZoom: mapLayersMaxZoom, Source: artifacts.AirportsPath},
-			"aviation_zones":            {MinZoom: 6, MaxZoom: mapLayersMaxZoom, Source: artifacts.ZonesPath},
-			"aviation_poi":              {MinZoom: 8, MaxZoom: mapLayersMaxZoom, Source: artifacts.PointsOfInterestPath},
-			"aviation_airspace_borders": {MinZoom: 6, MaxZoom: mapLayersMaxZoom, Source: artifacts.AirspaceBordersPath},
+			// Consolidated OpenMapTiles-compatible OSM layers with class attributes.
+			// Polygon layers: simplify geometry + drop tiny features at low zoom.
+			"landuse": {
+				MinZoom: 6, MaxZoom: mapLayersMaxZoom,
+				SimplifyBelow: 10, SimplifyLevel: 0.0003,
+				FilterBelow: 10, FilterArea: 0.00005,
+			},
+			"landcover": {
+				MinZoom: 6, MaxZoom: mapLayersMaxZoom,
+				SimplifyBelow: 10, SimplifyLevel: 0.0003,
+				FilterBelow: 10, FilterArea: 0.00005,
+			},
+			"water": {
+				MinZoom: 8, MaxZoom: mapLayersMaxZoom,
+				SimplifyBelow: 10, SimplifyLevel: 0.0001,
+				FilterBelow: 10, FilterArea: 0.00001,
+			},
+			// Line layers: simplify geometry at low zoom.
+			"waterway": {
+				MinZoom: 6, MaxZoom: mapLayersMaxZoom,
+				SimplifyBelow: 10, SimplifyLevel: 0.0001,
+			},
+			"transportation": {
+				MinZoom: 5, MaxZoom: mapLayersMaxZoom,
+				SimplifyBelow: 10, SimplifyLevel: 0.0001,
+			},
+			// Point layer: no simplification (MinZoom set per-feature in Lua).
+			"place": {MinZoom: 5, MaxZoom: mapLayersMaxZoom},
+			// Aviation overlay layers from GeoJSON sources.
+			"aviation_airports":         {MinZoom: 6, MaxZoom: mapLayersMaxZoom, Source: artifacts.AirportsPath, SourceColumns: true},
+			"aviation_zones":            {MinZoom: 6, MaxZoom: mapLayersMaxZoom, Source: artifacts.ZonesPath, SourceColumns: true},
+			"aviation_poi":              {MinZoom: 8, MaxZoom: mapLayersMaxZoom, Source: artifacts.PointsOfInterestPath, SourceColumns: true},
+			"aviation_airspace_borders": {MinZoom: 6, MaxZoom: mapLayersMaxZoom, Source: artifacts.AirspaceBordersPath, SourceColumns: true},
+			"countries_boundary": {
+				MinZoom: 5, MaxZoom: mapLayersMaxZoom, Source: artifacts.CountriesBoundaryPath, SourceColumns: true,
+				SimplifyBelow: 10, SimplifyLevel: 0.0001,
+			},
 		},
 		"settings": map[string]any{
 			"minzoom":     mapLayersMinZoom,
@@ -153,81 +225,3 @@ func buildTilemakerConfigJSON(artifacts domain.MapGeoJSONArtifacts) ([]byte, err
 
 	return b, nil
 }
-
-const tilemakerProcessLua = `
-node_keys = { "place" }
-way_keys  = { "landuse", "natural", "waterway", "intermittent", "tunnel", "highway" }
-
-local place_other = {
-  village = true,
-  hamlet = true,
-  suburb = true,
-  quarter = true,
-  neighbourhood = true,
-  locality = true
-}
-
-function node_function()
-  local place = Find("place")
-  if place == "city" or place == "town" then
-    Layer("place_label_city", false)
-    Attribute("class", place)
-    Attribute("name", Find("name"))
-    return
-  end
-
-  if place_other[place] then
-    Layer("place_label_other", false)
-    Attribute("class", place)
-    Attribute("name", Find("name"))
-    return
-  end
-end
-
-function way_function()
-  local landuse = Find("landuse")
-  local natural = Find("natural")
-  local waterway = Find("waterway")
-  local highway = Find("highway")
-  local tunnel = Find("tunnel")
-  local intermittent = Find("intermittent")
-  local is_closed = IsClosed()
-
-  if landuse == "residential" and is_closed then
-    Layer("landuse-residential", true)
-  end
-
-  if is_closed and (natural == "grassland" or natural == "grass" or landuse == "meadow") then
-    Layer("landcover_grass", true)
-  end
-
-  if is_closed and (natural == "wood" or landuse == "forest") then
-    Layer("landcover_wood", true)
-  end
-
-  if is_closed and (natural == "water" or waterway == "riverbank") then
-    Layer("water", true)
-    if intermittent == "yes" then
-      Layer("water_intermittent", true)
-    end
-  end
-
-  if waterway ~= "" and not is_closed then
-    Layer("waterway", false)
-    if tunnel == "yes" then
-      Layer("waterway-tunnel", false)
-    end
-    if intermittent == "yes" then
-      Layer("waterway_intermittent", false)
-    end
-  end
-
-  if highway == "motorway" then
-    Layer("road_major_motorway", false)
-  elseif highway == "trunk" or highway == "primary" then
-    Layer("road_trunk_primary", false)
-  elseif highway == "secondary" or highway == "tertiary" then
-    Layer("road_secondary_tertiary", false)
-  end
-end
-`

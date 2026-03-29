@@ -62,12 +62,13 @@ touch "$out"
 	}
 
 	artifacts := domain.MapGeoJSONArtifacts{
-		AirportsPath:         filepath.Join(tmp, "aviation_airports.geojson"),
-		ZonesPath:            filepath.Join(tmp, "aviation_zones.geojson"),
-		PointsOfInterestPath: filepath.Join(tmp, "aviation_poi.geojson"),
-		AirspaceBordersPath:  filepath.Join(tmp, "aviation_airspace_borders.geojson"),
+		AirportsPath:          filepath.Join(tmp, "aviation_airports.geojson"),
+		ZonesPath:             filepath.Join(tmp, "aviation_zones.geojson"),
+		PointsOfInterestPath:  filepath.Join(tmp, "aviation_poi.geojson"),
+		AirspaceBordersPath:   filepath.Join(tmp, "aviation_airspace_borders.geojson"),
+		CountriesBoundaryPath: filepath.Join(tmp, "countries_boundary.geojson"),
 	}
-	for _, path := range []string{artifacts.AirportsPath, artifacts.ZonesPath, artifacts.PointsOfInterestPath, artifacts.AirspaceBordersPath} {
+	for _, path := range []string{artifacts.AirportsPath, artifacts.ZonesPath, artifacts.PointsOfInterestPath, artifacts.AirspaceBordersPath, artifacts.CountriesBoundaryPath} {
 		if err := os.WriteFile(path, []byte("{}"), 0o644); err != nil {
 			t.Fatalf("write artifact %q: %v", path, err)
 		}
@@ -93,10 +94,11 @@ func TestGenerateTilemakerRuntimeFilesContainsRequiredLayers(t *testing.T) {
 	t.Parallel()
 
 	artifacts := domain.MapGeoJSONArtifacts{
-		AirportsPath:         "/tmp/aviation_airports.geojson",
-		ZonesPath:            "/tmp/aviation_zones.geojson",
-		PointsOfInterestPath: "/tmp/aviation_poi.geojson",
-		AirspaceBordersPath:  "/tmp/aviation_airspace_borders.geojson",
+		AirportsPath:          "/tmp/aviation_airports.geojson",
+		ZonesPath:             "/tmp/aviation_zones.geojson",
+		PointsOfInterestPath:  "/tmp/aviation_poi.geojson",
+		AirspaceBordersPath:   "/tmp/aviation_airspace_borders.geojson",
+		CountriesBoundaryPath: "/tmp/countries_boundary.geojson",
 	}
 
 	configPath, processPath, err := generateTilemakerRuntimeFiles(t.TempDir(), artifacts)
@@ -109,7 +111,15 @@ func TestGenerateTilemakerRuntimeFilesContainsRequiredLayers(t *testing.T) {
 		t.Fatalf("read config: %v", err)
 	}
 
-	for _, token := range []string{"landuse-residential", "road_major_motorway", "place_label_other", "aviation_airspace_borders"} {
+	for _, token := range []string{
+		"landuse", "landcover", "water", "transportation", "place",
+		"aviation_airspace_borders",
+		"countries_boundary",
+		"source_columns",
+		// Simplification and filtering parameters must be present.
+		"simplify_below", "simplify_level",
+		"filter_below", "filter_area",
+	} {
 		if !strings.Contains(string(cb), token) {
 			t.Fatalf("expected token %q in generated config", token)
 		}
@@ -120,7 +130,19 @@ func TestGenerateTilemakerRuntimeFilesContainsRequiredLayers(t *testing.T) {
 		t.Fatalf("read process lua: %v", err)
 	}
 
-	for _, token := range []string{"place_label_city", "place_label_other", "road_trunk_primary", "waterway-tunnel"} {
+	for _, token := range []string{
+		`Layer("place"`,
+		`Layer("transportation"`,
+		`Layer("waterway"`,
+		`Layer("water"`,
+		`Layer("landuse"`,
+		`Layer("landcover"`,
+		`Attribute("class"`,
+		`AttributeInteger("intermittent"`,
+		// Per-feature MinZoom must be used for places and roads.
+		`MinZoom(mz)`,
+		`write_to_transportation_layer(minzoom`,
+	} {
 		if !strings.Contains(string(pb), token) {
 			t.Fatalf("expected token %q in generated process lua", token)
 		}

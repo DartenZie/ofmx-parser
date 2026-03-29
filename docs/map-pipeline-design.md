@@ -67,6 +67,7 @@ Generated transient assets (in temp directory):
 - `aviation_zones.geojson`
 - `aviation_poi.geojson`
 - `aviation_airspace_borders.geojson`
+- `countries_boundary.geojson`
 - generated tilemaker `tilemaker.generated.config.json`
 - generated tilemaker `tilemaker.generated.process.lua`
 
