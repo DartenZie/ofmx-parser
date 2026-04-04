@@ -160,4 +160,7 @@ Implemented map dataset entities:
 - airports point layer,
 - zones polygon layer (stitches connected `Abd` border parts per airspace; when disconnected rings exist, selects the largest ring for polygon export),
 - points-of-interest point layer (navaids, designated points, obstacles),
-- deduplicated airspace border line layer.
+  - navaid POI vocalic rule: if `codeId` consists only of letters `A-Z`, `name` is replaced with NATO phonetic words
+    (`A` -> `Alpha`, `B` -> `Bravo`, ..., `Z` -> `Zulu`) and POI property `type` is set to `vocalic`,
+- deduplicated + stitched airspace border line layer (includes `zone_type` derived from `zone_a`; contiguous edges with unchanged zone ownership are emitted as continuous LineStrings; shared edges are kept as one line only when adjacent zones have the same `zone_type`, otherwise the same geometry is emitted once per zone type),
+- country boundary line layer from parsed `Gbr` features (all parsed borders with at least two valid points).

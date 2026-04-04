@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 
 	"github.com/DartenZie/ofmx-parser/internal/domain"
 )
@@ -33,6 +34,7 @@ func (m DefaultMapMapper) MapToMapDataset(_ context.Context, input domain.OFMXDo
 		Zones:            make([]domain.MapZonePolygon, 0, len(input.Airspaces)),
 		PointsOfInterest: make([]domain.MapPOI, 0, len(input.VORs)+len(input.NDBs)+len(input.DMEs)+len(input.TACANs)+len(input.Markers)+len(input.DesignatedPoints)+len(input.Obstacles)),
 		AirspaceBorders:  make([]domain.MapBorderLine, 0),
+		CountryBorders:   make([]domain.MapCountryBoundary, 0, len(input.CountryBorders)),
 	}
 
 	for _, ap := range input.Airports {
@@ -59,6 +61,7 @@ func (m DefaultMapMapper) MapToMapDataset(_ context.Context, input domain.OFMXDo
 	}
 
 	allowedAirspaceIDs := make(map[string]struct{}, len(input.Airspaces))
+	airspaceTypeByID := make(map[string]string, len(input.Airspaces))
 	for _, as := range input.Airspaces {
 		if !passesAirspaceFilters(as, allowedTypes, maxLowerFL) {
 			continue
@@ -70,6 +73,7 @@ func (m DefaultMapMapper) MapToMapDataset(_ context.Context, input domain.OFMXDo
 		}
 
 		allowedAirspaceIDs[as.ID] = struct{}{}
+		airspaceTypeByID[as.ID] = as.Type
 		upValue := as.UpperValueM
 		if upValue == 0 {
 			upValue = as.LowerValueM
@@ -92,25 +96,41 @@ func (m DefaultMapMapper) MapToMapDataset(_ context.Context, input domain.OFMXDo
 		return dataset.Zones[i].ID < dataset.Zones[j].ID
 	})
 
-	dataset.AirspaceBorders = dedupeAirspaceBorders(filterAirspaceBordersByID(input.AirspaceBorders, allowedAirspaceIDs))
+	dataset.AirspaceBorders = annotateAirspaceBorders(
+		dedupeAirspaceBorders(filterAirspaceBordersByID(input.AirspaceBorders, allowedAirspaceIDs)),
+		airspaceTypeByID,
+	)
 
-	for _, v := range input.VORs {
-		dataset.PointsOfInterest = append(dataset.PointsOfInterest, domain.MapPOI{ID: v.ID, Kind: "VOR", Name: firstNonEmpty(v.Name, v.ID), Lat: v.Lat, Lon: v.Lon})
+	for _, border := range input.CountryBorders {
+		if len(border.Points) < 2 {
+			continue
+		}
+
+		dataset.CountryBorders = append(dataset.CountryBorders, domain.MapCountryBoundary{
+			UID:  border.UID,
+			Name: border.Name,
+			Line: append([]domain.OFMXGeoPoint(nil), border.Points...),
+		})
 	}
+
+	sort.Slice(dataset.CountryBorders, func(i, j int) bool {
+		if dataset.CountryBorders[i].UID == dataset.CountryBorders[j].UID {
+			return dataset.CountryBorders[i].Name < dataset.CountryBorders[j].Name
+		}
+		return dataset.CountryBorders[i].UID < dataset.CountryBorders[j].UID
+	})
+
 	for _, v := range input.NDBs {
-		dataset.PointsOfInterest = append(dataset.PointsOfInterest, domain.MapPOI{ID: v.ID, Kind: "NDB", Name: firstNonEmpty(v.Name, v.ID), Lat: v.Lat, Lon: v.Lon})
-	}
-	for _, v := range input.DMEs {
-		dataset.PointsOfInterest = append(dataset.PointsOfInterest, domain.MapPOI{ID: v.ID, Kind: "DME", Name: firstNonEmpty(v.Name, v.ID), Lat: v.Lat, Lon: v.Lon})
+		dataset.PointsOfInterest = append(dataset.PointsOfInterest, mapNavaidPOI(v.ID, "NDB", firstNonEmpty(v.Name, v.ID), v.Lat, v.Lon))
 	}
 	for _, v := range input.TACANs {
-		dataset.PointsOfInterest = append(dataset.PointsOfInterest, domain.MapPOI{ID: v.ID, Kind: "TACAN", Name: firstNonEmpty(v.Name, v.ID), Lat: v.Lat, Lon: v.Lon})
+		dataset.PointsOfInterest = append(dataset.PointsOfInterest, mapNavaidPOI(v.ID, "TACAN", firstNonEmpty(v.Name, v.ID), v.Lat, v.Lon))
 	}
 	for _, v := range input.Markers {
-		dataset.PointsOfInterest = append(dataset.PointsOfInterest, domain.MapPOI{ID: v.ID, Kind: "MARKER", Name: firstNonEmpty(v.Name, v.ID), Lat: v.Lat, Lon: v.Lon})
+		dataset.PointsOfInterest = append(dataset.PointsOfInterest, mapNavaidPOI(v.ID, "MARKER", firstNonEmpty(v.Name, v.ID), v.Lat, v.Lon))
 	}
 	for _, v := range input.DesignatedPoints {
-		dataset.PointsOfInterest = append(dataset.PointsOfInterest, domain.MapPOI{ID: v.ID, Kind: "DESIGNATED", Name: firstNonEmpty(v.Name, v.ID), Lat: v.Lat, Lon: v.Lon})
+		dataset.PointsOfInterest = append(dataset.PointsOfInterest, mapNavaidPOI(v.ID, "DESIGNATED", firstNonEmpty(v.Name, v.ID), v.Lat, v.Lon))
 	}
 	for _, v := range input.Obstacles {
 		dataset.PointsOfInterest = append(dataset.PointsOfInterest, domain.MapPOI{ID: v.ID, Kind: "OBSTACLE", Name: firstNonEmpty(v.Name, v.ID), Lat: v.Lat, Lon: v.Lon})
@@ -251,6 +271,17 @@ type borderAggregate struct {
 	zones map[string]struct{}
 }
 
+type borderSegment struct {
+	a quantizedPoint
+	b quantizedPoint
+}
+
+type graphEdge struct {
+	a    quantizedPoint
+	b    quantizedPoint
+	used bool
+}
+
 func dedupeAirspaceBorders(borders []domain.OFMXAirspaceBorder) []domain.MapBorderLine {
 	edges := make(map[string]*borderAggregate)
 
@@ -286,30 +317,287 @@ func dedupeAirspaceBorders(borders []domain.OFMXAirspaceBorder) []domain.MapBord
 	}
 	sort.Strings(keys)
 
-	out := make([]domain.MapBorderLine, 0, len(keys))
+	type groupedSegments struct {
+		zones    []string
+		segments []borderSegment
+	}
+	groups := make(map[string]*groupedSegments)
+	groupKeys := make([]string, 0)
+
 	for _, key := range keys {
 		agg := edges[key]
 		zones := sortedZoneIDs(agg.zones)
+		groupKey := strings.Join(zones, "|")
 
-		line := domain.MapBorderLine{
-			EdgeID: key,
-			Shared: len(zones) > 1,
-			Line: []domain.OFMXGeoPoint{
-				dequantizePoint(agg.a),
-				dequantizePoint(agg.b),
-			},
+		bucket, ok := groups[groupKey]
+		if !ok {
+			bucket = &groupedSegments{zones: zones, segments: make([]borderSegment, 0)}
+			groups[groupKey] = bucket
+			groupKeys = append(groupKeys, groupKey)
 		}
-
-		if len(zones) > 0 {
-			line.ZoneA = zones[0]
-		}
-		if len(zones) > 1 {
-			line.ZoneB = zones[1]
-		}
-
-		out = append(out, line)
+		bucket.segments = append(bucket.segments, borderSegment{a: agg.a, b: agg.b})
 	}
 
+	sort.Strings(groupKeys)
+	out := make([]domain.MapBorderLine, 0, len(keys))
+	for _, groupKey := range groupKeys {
+		bucket := groups[groupKey]
+		lines := stitchSegments(bucket.segments)
+		for _, linePoints := range lines {
+			line := domain.MapBorderLine{
+				EdgeID: edgeLineKey(linePoints),
+				Shared: len(bucket.zones) > 1,
+				Line:   dequantizedLine(linePoints),
+			}
+
+			if len(bucket.zones) > 0 {
+				line.ZoneA = bucket.zones[0]
+			}
+			if len(bucket.zones) > 1 {
+				line.ZoneB = bucket.zones[1]
+			}
+
+			out = append(out, line)
+		}
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].EdgeID == out[j].EdgeID {
+			if out[i].ZoneA == out[j].ZoneA {
+				return out[i].ZoneB < out[j].ZoneB
+			}
+			return out[i].ZoneA < out[j].ZoneA
+		}
+		return out[i].EdgeID < out[j].EdgeID
+	})
+
+	return out
+}
+
+func annotateAirspaceBorders(borders []domain.MapBorderLine, airspaceTypeByID map[string]string) []domain.MapBorderLine {
+	if len(borders) == 0 {
+		return nil
+	}
+
+	out := make([]domain.MapBorderLine, 0, len(borders)*2)
+	for _, border := range borders {
+		zoneAType := airspaceTypeByID[border.ZoneA]
+		zoneBType := airspaceTypeByID[border.ZoneB]
+
+		if border.Shared && border.ZoneA != "" && border.ZoneB != "" && zoneAType != "" && zoneBType != "" && zoneAType != zoneBType {
+			first := border
+			first.ZoneType = zoneAType
+
+			second := border
+			second.ZoneA = border.ZoneB
+			second.ZoneB = border.ZoneA
+			second.ZoneType = zoneBType
+
+			out = append(out, first, second)
+			continue
+		}
+
+		border.ZoneType = zoneAType
+		out = append(out, border)
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].EdgeID != out[j].EdgeID {
+			return out[i].EdgeID < out[j].EdgeID
+		}
+		if out[i].ZoneA != out[j].ZoneA {
+			return out[i].ZoneA < out[j].ZoneA
+		}
+		if out[i].ZoneB != out[j].ZoneB {
+			return out[i].ZoneB < out[j].ZoneB
+		}
+		if out[i].ZoneType != out[j].ZoneType {
+			return out[i].ZoneType < out[j].ZoneType
+		}
+		if out[i].Shared != out[j].Shared {
+			return !out[i].Shared && out[j].Shared
+		}
+		return false
+	})
+
+	return out
+}
+
+func stitchSegments(segments []borderSegment) [][]quantizedPoint {
+	if len(segments) == 0 {
+		return nil
+	}
+
+	graph := make([]graphEdge, 0, len(segments))
+	adj := make(map[quantizedPoint][]int)
+	for _, seg := range segments {
+		idx := len(graph)
+		graph = append(graph, graphEdge{a: seg.a, b: seg.b})
+		adj[seg.a] = append(adj[seg.a], idx)
+		adj[seg.b] = append(adj[seg.b], idx)
+	}
+
+	vertices := make([]quantizedPoint, 0, len(adj))
+	for p := range adj {
+		vertices = append(vertices, p)
+	}
+	sort.Slice(vertices, func(i, j int) bool { return compareQuantizedPoints(vertices[i], vertices[j]) < 0 })
+
+	lines := make([][]quantizedPoint, 0, len(segments))
+
+	for _, start := range vertices {
+		if len(adj[start]) == 2 {
+			continue
+		}
+
+		for {
+			edgeIdx, ok := firstUnusedIncidentEdge(start, adj[start], graph)
+			if !ok {
+				break
+			}
+			lines = append(lines, walkLine(start, edgeIdx, adj, graph))
+		}
+	}
+
+	for {
+		edgeIdx, ok := firstUnusedEdge(graph)
+		if !ok {
+			break
+		}
+
+		start := graph[edgeIdx].a
+		if compareQuantizedPoints(graph[edgeIdx].b, start) < 0 {
+			start = graph[edgeIdx].b
+		}
+
+		lines = append(lines, walkLine(start, edgeIdx, adj, graph))
+	}
+
+	sort.Slice(lines, func(i, j int) bool { return edgeLineKey(lines[i]) < edgeLineKey(lines[j]) })
+	return lines
+}
+
+func firstUnusedIncidentEdge(at quantizedPoint, edgeIndexes []int, graph []graphEdge) (int, bool) {
+	bestIdx := -1
+	var bestOther quantizedPoint
+
+	for _, idx := range edgeIndexes {
+		if graph[idx].used {
+			continue
+		}
+		other := graph[idx].a
+		if other == at {
+			other = graph[idx].b
+		}
+
+		if bestIdx == -1 || compareQuantizedPoints(other, bestOther) < 0 || (other == bestOther && idx < bestIdx) {
+			bestIdx = idx
+			bestOther = other
+		}
+	}
+
+	if bestIdx == -1 {
+		return 0, false
+	}
+	return bestIdx, true
+}
+
+func firstUnusedEdge(graph []graphEdge) (int, bool) {
+	bestIdx := -1
+	var bestA, bestB quantizedPoint
+
+	for idx := range graph {
+		if graph[idx].used {
+			continue
+		}
+
+		a := graph[idx].a
+		b := graph[idx].b
+		if compareQuantizedPoints(b, a) < 0 {
+			a, b = b, a
+		}
+
+		if bestIdx == -1 || compareQuantizedPoints(a, bestA) < 0 || (a == bestA && (compareQuantizedPoints(b, bestB) < 0 || (b == bestB && idx < bestIdx))) {
+			bestIdx = idx
+			bestA = a
+			bestB = b
+		}
+	}
+
+	if bestIdx == -1 {
+		return 0, false
+	}
+	return bestIdx, true
+}
+
+func walkLine(start quantizedPoint, startEdge int, adj map[quantizedPoint][]int, graph []graphEdge) []quantizedPoint {
+	line := []quantizedPoint{start}
+	current := start
+	edgeIdx := startEdge
+
+	for {
+		if graph[edgeIdx].used {
+			break
+		}
+
+		next := graph[edgeIdx].a
+		if next == current {
+			next = graph[edgeIdx].b
+		}
+
+		graph[edgeIdx].used = true
+		line = append(line, next)
+
+		if len(adj[next]) != 2 {
+			break
+		}
+
+		nextEdge, ok := firstUnusedIncidentEdge(next, adj[next], graph)
+		if !ok {
+			break
+		}
+
+		current = next
+		edgeIdx = nextEdge
+	}
+
+	return line
+}
+
+func dequantizedLine(points []quantizedPoint) []domain.OFMXGeoPoint {
+	line := make([]domain.OFMXGeoPoint, 0, len(points))
+	for _, p := range points {
+		line = append(line, dequantizePoint(p))
+	}
+	return line
+}
+
+func edgeLineKey(points []quantizedPoint) string {
+	forward := encodeQuantizedPath(points)
+	reverse := encodeQuantizedPath(reversedQuantizedPoints(points))
+	if reverse < forward {
+		return "L_" + reverse
+	}
+	return "L_" + forward
+}
+
+func encodeQuantizedPath(points []quantizedPoint) string {
+	b := strings.Builder{}
+	for i, p := range points {
+		if i > 0 {
+			b.WriteString("_")
+		}
+		b.WriteString(fmt.Sprintf("%d_%d", p.lat, p.lon))
+	}
+	return b.String()
+}
+
+func reversedQuantizedPoints(points []quantizedPoint) []quantizedPoint {
+	out := append([]quantizedPoint(nil), points...)
+	for i := 0; i < len(out)/2; i++ {
+		j := len(out) - 1 - i
+		out[i], out[j] = out[j], out[i]
+	}
 	return out
 }
 
@@ -385,4 +673,57 @@ func sortedZoneIDs(m map[string]struct{}) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+var navaidPhoneticAlphabet = map[rune]string{
+	'A': "Alpha",
+	'B': "Bravo",
+	'C': "Charlie",
+	'D': "Delta",
+	'E': "Echo",
+	'F': "Foxtrot",
+	'G': "Golf",
+	'H': "Hotel",
+	'I': "India",
+	'J': "Juliett",
+	'K': "Kilo",
+	'L': "Lima",
+	'M': "Mike",
+	'N': "November",
+	'O': "Oscar",
+	'P': "Papa",
+	'Q': "Quebec",
+	'R': "Romeo",
+	'S': "Sierra",
+	'T': "Tango",
+	'U': "Uniform",
+	'V': "Victor",
+	'W': "Whiskey",
+	'X': "X-ray",
+	'Y': "Yankee",
+	'Z': "Zulu",
+}
+
+func mapNavaidPOI(id, kind, defaultName string, lat, lon float64) domain.MapPOI {
+	vocalicName, ok := vocalicNavaidName(id)
+	if ok {
+		return domain.MapPOI{ID: id, Kind: kind, Name: vocalicName, Type: "vocalic", Lat: lat, Lon: lon}
+	}
+
+	return domain.MapPOI{ID: id, Kind: kind, Name: defaultName, Lat: lat, Lon: lon}
+}
+
+func vocalicNavaidName(id string) (string, bool) {
+	trimmed := strings.TrimSpace(id)
+	if len([]rune(trimmed)) != 1 {
+		return trimmed, false
+	}
+
+	r := []rune(strings.ToUpper(trimmed))[0]
+	word, ok := navaidPhoneticAlphabet[r]
+	if !ok {
+		return trimmed, false
+	}
+
+	return word, true
 }

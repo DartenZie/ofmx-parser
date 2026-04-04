@@ -27,6 +27,7 @@ type CLIConfig struct {
 	ArcMaxChordM      float64
 	PBFInputPath      string
 	PMTilesOutputPath string
+	GeoJSONOutputDir  string
 	TilemakerBin      string
 	TilemakerConfig   string
 	TilemakerProcess  string
@@ -45,6 +46,7 @@ func ParseArgs(args []string) (CLIConfig, error) {
 	arcMaxChord := fs.Float64("arc-max-chord-m", 750, "Maximum arc chord length in meters used when densifying OFMX arc/circle borders")
 	pbfInput := fs.String("pbf-input", "", "Path to OSM PBF input for PMTiles generation")
 	pmtilesOutput := fs.String("pmtiles-output", "", "Path to output PMTiles file")
+	geojsonOutputDir := fs.String("geojson-output-dir", "", "Optional directory to persist only generated GeoJSON layer files for debugging")
 	tilemakerBin := fs.String("tilemaker-bin", "tilemaker", "Tilemaker executable path/name")
 	tilemakerConfig := fs.String("tilemaker-config", "", "Optional tilemaker config override")
 	tilemakerProcess := fs.String("tilemaker-process", "", "Optional tilemaker process.lua override")
@@ -62,6 +64,7 @@ func ParseArgs(args []string) (CLIConfig, error) {
 		ArcMaxChordM:      *arcMaxChord,
 		PBFInputPath:      *pbfInput,
 		PMTilesOutputPath: *pmtilesOutput,
+		GeoJSONOutputDir:  *geojsonOutputDir,
 		TilemakerBin:      *tilemakerBin,
 		TilemakerConfig:   *tilemakerConfig,
 		TilemakerProcess:  *tilemakerProcess,
@@ -89,7 +92,7 @@ func (c CLIConfig) Validate() error {
 		return domain.NewError(domain.ErrConfig, "--arc-max-chord-m must be > 0", nil)
 	}
 
-	mapRequested := c.PBFInputPath != "" || c.PMTilesOutputPath != "" || c.TilemakerConfig != "" || c.TilemakerProcess != "" || c.MapTempDir != ""
+	mapRequested := c.PBFInputPath != "" || c.PMTilesOutputPath != "" || c.GeoJSONOutputDir != "" || c.TilemakerConfig != "" || c.TilemakerProcess != "" || c.MapTempDir != ""
 	if mapRequested {
 		if c.PBFInputPath == "" {
 			return domain.NewError(domain.ErrConfig, "--pbf-input is required when map generation is enabled", nil)

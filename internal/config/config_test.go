@@ -31,6 +31,19 @@ func TestParseArgsRejectsMapModeWithoutPBF(t *testing.T) {
 	}
 }
 
+func TestParseArgsRejectsGeoJSONDebugWithoutPBF(t *testing.T) {
+	t.Parallel()
+
+	_, err := ParseArgs([]string{
+		"--input", "input.ofmx",
+		"--pmtiles-output", "map.pmtiles",
+		"--geojson-output-dir", "debug",
+	})
+	if err == nil {
+		t.Fatal("expected error when --pbf-input missing with --geojson-output-dir")
+	}
+}
+
 func TestParseArgsRejectsWhenNoOutputRequested(t *testing.T) {
 	t.Parallel()
 

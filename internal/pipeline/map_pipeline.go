@@ -74,6 +74,11 @@ func (s MapService) Execute(ctx context.Context, input domain.OFMXDocument, req 
 	}
 	log.Printf("Wrote GeoJSON runtime artifacts in %s", time.Since(geoJSONStartedAt).Round(time.Millisecond))
 
+	if err := output.WriteGeoJSONDebugBundle(ctx, artifacts, req.GeoJSONOutputDir); err != nil {
+		runErr = err
+		return domain.MapGeoJSONArtifacts{}, runErr
+	}
+
 	tilemakerStartedAt := time.Now()
 	log.Printf("Running tilemaker and writing PMTiles")
 

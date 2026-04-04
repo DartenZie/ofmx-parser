@@ -207,6 +207,49 @@ func TestParseCoordinateSupportsDecimalAndDMS(t *testing.T) {
 	}
 }
 
+func TestFileReaderReadParsesCountryBordersFromGbr(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	inputPath := filepath.Join(tmpDir, "snapshot_gbr.ofmx")
+
+	input := `<?xml version="1.0" encoding="UTF-8"?>
+<OFMX-Snapshot version="0.1.0" origin="unit-test" namespace="123e4567-e89b-12d3-a456-426614174000" created="2026-01-01T00:00:00Z" effective="2026-01-01T00:00:00Z">
+  <Gbr>
+    <GbrUid mid="BORDER-1"><txtName>CZ_DE</txtName></GbrUid>
+    <Gbv><codeType>GRC</codeType><geoLat>50.000000N</geoLat><geoLong>014.000000E</geoLong><codeDatum>WGE</codeDatum></Gbv>
+    <Gbv><codeType>GRC</codeType><geoLat>50.100000N</geoLat><geoLong>014.100000E</geoLong><codeDatum>WGE</codeDatum></Gbv>
+    <Gbv><codeType>GRC</codeType><geoLat>50.200000N</geoLat><geoLong>014.200000E</geoLong><codeDatum>WGE</codeDatum></Gbv>
+  </Gbr>
+  <Gbr>
+    <GbrUid mid="BORDER-2"><txtName>CZ_PL</txtName></GbrUid>
+    <Gbv><codeType>GRC</codeType><geoLat>49.000000N</geoLat><geoLong>015.000000E</geoLong><codeDatum>WGE</codeDatum></Gbv>
+    <Gbv><codeType>GRC</codeType><geoLat>49.100000N</geoLat><geoLong>015.100000E</geoLong><codeDatum>WGE</codeDatum></Gbv>
+  </Gbr>
+</OFMX-Snapshot>`
+
+	if err := os.WriteFile(inputPath, []byte(input), 0o600); err != nil {
+		t.Fatalf("write input: %v", err)
+	}
+
+	doc, err := FileReader{}.Read(context.Background(), inputPath)
+	if err != nil {
+		t.Fatalf("reader.Read failed: %v", err)
+	}
+
+	if len(doc.CountryBorders) != 2 {
+		t.Fatalf("expected 2 parsed country borders, got %+v", doc.CountryBorders)
+	}
+
+	if doc.CountryBorders[0].UID != "BORDER-1" || doc.CountryBorders[0].Name != "CZ_DE" {
+		t.Fatalf("unexpected first parsed country border: %+v", doc.CountryBorders[0])
+	}
+
+	if len(doc.CountryBorders[0].Points) != 3 {
+		t.Fatalf("expected BORDER-1 to have 3 points, got %+v", doc.CountryBorders[0].Points)
+	}
+}
+
 func TestParseCoordinateRejectsOutOfRange(t *testing.T) {
 	t.Parallel()
 

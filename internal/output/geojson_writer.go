@@ -15,10 +15,11 @@ import (
 )
 
 const (
-	airportsGeoJSONFileName         = "aviation_airports.geojson"
-	zonesGeoJSONFileName            = "aviation_zones.geojson"
-	pointsOfInterestGeoJSONFileName = "aviation_poi.geojson"
-	airspaceBordersGeoJSONFileName  = "aviation_airspace_borders.geojson"
+	airportsGeoJSONFileName          = "aviation_airports.geojson"
+	zonesGeoJSONFileName             = "aviation_zones.geojson"
+	pointsOfInterestGeoJSONFileName  = "aviation_poi.geojson"
+	airspaceBordersGeoJSONFileName   = "aviation_airspace_borders.geojson"
+	countriesBoundaryGeoJSONFileName = "countries_boundary.geojson"
 )
 
 // MapGeoJSONWriter writes map dataset layers as GeoJSON source files.
@@ -29,7 +30,7 @@ type MapGeoJSONWriter interface {
 // GeoJSONFileWriter serializes map dataset layers into GeoJSON files.
 type GeoJSONFileWriter struct{}
 
-// Write writes four aviation GeoJSON files to dir.
+// Write writes map GeoJSON source files to dir.
 func (w GeoJSONFileWriter) Write(ctx context.Context, dataset domain.MapDataset, dir string) (domain.MapGeoJSONArtifacts, error) {
 	if err := ctx.Err(); err != nil {
 		return domain.MapGeoJSONArtifacts{}, domain.NewError(domain.ErrOutput, "GeoJSON write cancelled", err)
@@ -40,10 +41,11 @@ func (w GeoJSONFileWriter) Write(ctx context.Context, dataset domain.MapDataset,
 	}
 
 	artifacts := domain.MapGeoJSONArtifacts{
-		AirportsPath:         filepath.Join(dir, airportsGeoJSONFileName),
-		ZonesPath:            filepath.Join(dir, zonesGeoJSONFileName),
-		PointsOfInterestPath: filepath.Join(dir, pointsOfInterestGeoJSONFileName),
-		AirspaceBordersPath:  filepath.Join(dir, airspaceBordersGeoJSONFileName),
+		AirportsPath:          filepath.Join(dir, airportsGeoJSONFileName),
+		ZonesPath:             filepath.Join(dir, zonesGeoJSONFileName),
+		PointsOfInterestPath:  filepath.Join(dir, pointsOfInterestGeoJSONFileName),
+		AirspaceBordersPath:   filepath.Join(dir, airspaceBordersGeoJSONFileName),
+		CountriesBoundaryPath: filepath.Join(dir, countriesBoundaryGeoJSONFileName),
 	}
 
 	if err := writeGeoJSON(ctx, artifacts.AirportsPath, airportsFeatureCollection(dataset.Airports)); err != nil {
@@ -56,6 +58,9 @@ func (w GeoJSONFileWriter) Write(ctx context.Context, dataset domain.MapDataset,
 		return domain.MapGeoJSONArtifacts{}, err
 	}
 	if err := writeGeoJSON(ctx, artifacts.AirspaceBordersPath, bordersFeatureCollection(dataset.AirspaceBorders)); err != nil {
+		return domain.MapGeoJSONArtifacts{}, err
+	}
+	if err := writeGeoJSON(ctx, artifacts.CountriesBoundaryPath, countriesBoundaryFeatureCollection(dataset.CountryBorders)); err != nil {
 		return domain.MapGeoJSONArtifacts{}, err
 	}
 
@@ -157,17 +162,22 @@ func poiFeatureCollection(pois []domain.MapPOI) geoJSONFeatureCollection {
 
 	features := make([]geoJSONFeature, 0, len(sorted))
 	for _, poi := range sorted {
+		properties := map[string]any{
+			"id":   poi.ID,
+			"kind": poi.Kind,
+			"name": poi.Name,
+		}
+		if poi.Type != "" {
+			properties["type"] = poi.Type
+		}
+
 		features = append(features, geoJSONFeature{
 			Type: "Feature",
 			Geometry: geoJSONPoint{
 				Type:        "Point",
 				Coordinates: []float64{poi.Lon, poi.Lat},
 			},
-			Properties: map[string]any{
-				"id":   poi.ID,
-				"kind": poi.Kind,
-				"name": poi.Name,
-			},
+			Properties: properties,
 		})
 	}
 
@@ -196,10 +206,47 @@ func bordersFeatureCollection(borders []domain.MapBorderLine) geoJSONFeatureColl
 				Coordinates: coords,
 			},
 			Properties: map[string]any{
-				"edge_id": border.EdgeID,
-				"zone_a":  border.ZoneA,
-				"zone_b":  border.ZoneB,
-				"shared":  border.Shared,
+				"edge_id":   border.EdgeID,
+				"zone_a":    border.ZoneA,
+				"zone_b":    border.ZoneB,
+				"zone_type": border.ZoneType,
+				"shared":    border.Shared,
+			},
+		})
+	}
+
+	return geoJSONFeatureCollection{Type: "FeatureCollection", Features: features}
+}
+
+func countriesBoundaryFeatureCollection(borders []domain.MapCountryBoundary) geoJSONFeatureCollection {
+	sorted := append([]domain.MapCountryBoundary(nil), borders...)
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].UID == sorted[j].UID {
+			return sorted[i].Name < sorted[j].Name
+		}
+		return sorted[i].UID < sorted[j].UID
+	})
+
+	features := make([]geoJSONFeature, 0, len(sorted))
+	for _, border := range sorted {
+		if len(border.Line) < 2 {
+			continue
+		}
+
+		coords := make([][]float64, 0, len(border.Line))
+		for _, p := range border.Line {
+			coords = append(coords, []float64{p.Lon, p.Lat})
+		}
+
+		features = append(features, geoJSONFeature{
+			Type: "Feature",
+			Geometry: geoJSONLineString{
+				Type:        "LineString",
+				Coordinates: coords,
+			},
+			Properties: map[string]any{
+				"uid":  border.UID,
+				"name": border.Name,
 			},
 		})
 	}
