@@ -144,6 +144,7 @@ Map-related flags:
 - `--tilemaker-bin`: tilemaker binary path/name (default: `tilemaker`)
 - `--tilemaker-config`: optional custom tilemaker config override
 - `--tilemaker-process`: optional custom tilemaker process.lua override
+- `--geojson-output-dir`: optional directory where only generated GeoJSON layer files are copied for debugging
 - `--map-temp-dir`: optional temp directory for generated GeoJSON/config/process files
   - when omitted, a temporary directory is created automatically and removed after map generation
   - when provided, generated runtime files are kept in the specified directory

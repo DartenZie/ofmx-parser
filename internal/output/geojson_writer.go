@@ -162,17 +162,22 @@ func poiFeatureCollection(pois []domain.MapPOI) geoJSONFeatureCollection {
 
 	features := make([]geoJSONFeature, 0, len(sorted))
 	for _, poi := range sorted {
+		properties := map[string]any{
+			"id":   poi.ID,
+			"kind": poi.Kind,
+			"name": poi.Name,
+		}
+		if poi.Type != "" {
+			properties["type"] = poi.Type
+		}
+
 		features = append(features, geoJSONFeature{
 			Type: "Feature",
 			Geometry: geoJSONPoint{
 				Type:        "Point",
 				Coordinates: []float64{poi.Lon, poi.Lat},
 			},
-			Properties: map[string]any{
-				"id":   poi.ID,
-				"kind": poi.Kind,
-				"name": poi.Name,
-			},
+			Properties: properties,
 		})
 	}
 

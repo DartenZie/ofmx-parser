@@ -43,6 +43,7 @@ Map mode uses these flags:
 - `--tilemaker-bin <path-or-name>`: tilemaker executable (default `tilemaker`).
 - `--tilemaker-config <path>`: optional custom config override.
 - `--tilemaker-process <path>`: optional custom process.lua override.
+- `--geojson-output-dir <path>`: optional directory where only GeoJSON layer files are copied for debugging.
 - `--map-temp-dir <path>`: optional stable working directory for generated runtime files.
 
 ### 4.2 Execution Modes
@@ -76,6 +77,11 @@ Temp directory lifecycle:
 - if `--map-temp-dir` is provided, generated runtime artifacts are preserved in that directory,
 - if omitted, an auto-created temporary directory is removed after map pipeline completion (success or failure).
 
+Optional GeoJSON debug copy:
+
+- if `--geojson-output-dir` is provided, the five generated GeoJSON layer files are copied there after successful map generation,
+- only GeoJSON layer files are copied (no generated tilemaker config/process runtime files).
+
 Final artifact:
 
 - `<output>.pmtiles`
@@ -93,5 +99,5 @@ Typed errors in the implemented map branch include:
 ## 7. Determinism and Validation
 
 - GeoJSON feature ordering is stable and deterministic.
-- Shared airspace borders are deduplicated deterministically using normalized, quantized undirected segments.
+- Shared airspace borders are deduplicated deterministically using normalized, quantized undirected segments and stitched into maximal continuous lines when zone ownership does not change; shared geometry is emitted once per type only when adjacent zone types differ.
 - Integration tests validate map mode CLI wiring, strict-fail behavior, runtime artifact generation, and tilemaker argument propagation.

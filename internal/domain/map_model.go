@@ -7,6 +7,7 @@ package domain
 type MapExportRequest struct {
 	PBFInputPath      string
 	PMTilesOutputPath string
+	GeoJSONOutputDir  string
 	TilemakerBin      string
 	TilemakerConfig   string
 	TilemakerProcess  string
@@ -60,6 +61,7 @@ type MapPOI struct {
 	ID   string
 	Kind string
 	Name string
+	Type string
 	Lat  float64
 	Lon  float64
 }

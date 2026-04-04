@@ -112,11 +112,14 @@ at render time.
   - `id` (string)
   - `kind` (string; e.g. `VOR`, `NDB`, `OBSTACLE`, `DESIGNATED`)
   - `name` (string)
+- optional attributes:
+  - `type` (string; `vocalic` when navaid `codeId` is alphabetic `A-Z` and `name` is expanded to NATO phonetics)
 
 ### 4.4 aviation_airspace_borders
 
 - geometry: LineString
 - source: derived from filtered airspace polygon edges after deduplication
+- continuity rule: contiguous deduplicated edges with identical zone ownership are stitched into maximal polylines
 - mandatory attributes:
   - `edge_id` (string, deterministic)
   - `zone_a` (string)
@@ -135,19 +138,22 @@ at render time.
 
 ## 5. Shared Border Rule (Normative)
 
-Common borders of airspaces MUST be rendered as one logical line in the final map data.
+Common borders of airspaces MUST be rendered as one logical line in the final map data only when both adjacent zones have the same `zone_type`.
+When adjacent zones have different `zone_type`, the shared geometry MUST be emitted twice (one record per zone type).
 
 Algorithmic requirements:
 
 1. Polygon edges are treated as undirected segments.
 2. Segment orientation MUST be normalized (`A-B` equivalent to `B-A`).
 3. Segment keys MUST use deterministic coordinate quantization.
-4. Equal normalized keys MUST produce exactly one output border feature.
+4. Equal normalized keys MUST collapse to one logical edge with merged zone ownership.
+5. A collapsed shared edge MUST stay as one output record when both adjacent zones have identical `zone_type`; otherwise it MUST split into two output records with swapped `zone_a`/`zone_b` and their corresponding `zone_type` values.
+6. Output edges with identical ownership (including same-type shared cases) MUST be stitched into maximal non-branching LineStrings.
 
 Implementation detail:
 
 - Quantization factor is `1e6` in both latitude and longitude before edge key construction.
-- Edge IDs are deterministic canonical strings based on quantized endpoint coordinates.
+- Edge IDs are deterministic canonical strings based on quantized stitched polyline coordinates.
 
 ## 6. Determinism Requirements
 

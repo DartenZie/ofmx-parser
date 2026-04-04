@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OFMX-Snapshot version="0.1.0" origin="unit-test" namespace="123e4567-e89b-12d3-a456-426614174000" created="2026-01-01T00:00:00Z" effective="2026-01-01T00:00:00Z">
+  <Vor>
+    <VorUid>
+      <codeId>AB</codeId>
+      <geoLat>50.116667N</geoLat>
+      <geoLong>014.500000E</geoLong>
+    </VorUid>
+    <OrgUid><txtName>Authority</txtName></OrgUid>
+    <txtName>AB</txtName>
+    <codeType>VOR</codeType>
+    <valFreq>113.6</valFreq>
+    <uomFreq>MHZ</uomFreq>
+    <codeTypeNorth>TRUE</codeTypeNorth>
+    <codeDatum>WGE</codeDatum>
+  </Vor>
+</OFMX-Snapshot>

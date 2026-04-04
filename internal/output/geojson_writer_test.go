@@ -171,3 +171,32 @@ func TestGeoJSONFileWriterWriteSortsAirportFeaturesByID(t *testing.T) {
 		t.Fatalf("expected first airport id AAAA after sorting, got %q", firstID)
 	}
 }
+
+func TestGeoJSONFileWriterWriteIncludesVocalicTypeOnPOI(t *testing.T) {
+	t.Parallel()
+
+	dataset := domain.MapDataset{
+		PointsOfInterest: []domain.MapPOI{{ID: "AB", Kind: "VOR", Name: "Alpha Bravo", Type: "vocalic", Lat: 50.2, Lon: 14.4}},
+	}
+
+	artifacts, err := (GeoJSONFileWriter{}).Write(context.Background(), dataset, t.TempDir())
+	if err != nil {
+		t.Fatalf("write geojson failed: %v", err)
+	}
+
+	b, err := os.ReadFile(artifacts.PointsOfInterestPath)
+	if err != nil {
+		t.Fatalf("read poi file failed: %v", err)
+	}
+
+	var fc map[string]any
+	if err := json.Unmarshal(b, &fc); err != nil {
+		t.Fatalf("unmarshal poi geojson failed: %v", err)
+	}
+
+	features := fc["features"].([]any)
+	typ := features[0].(map[string]any)["properties"].(map[string]any)["type"].(string)
+	if typ != "vocalic" {
+		t.Fatalf("expected poi type vocalic, got %q", typ)
+	}
+}

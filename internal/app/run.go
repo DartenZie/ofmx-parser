@@ -129,6 +129,7 @@ func runWithReader(ctx context.Context, cfg config.CLIConfig, fileCfg config.Fil
 		mapReq := domain.MapExportRequest{
 			PBFInputPath:      cfg.PBFInputPath,
 			PMTilesOutputPath: cfg.PMTilesOutputPath,
+			GeoJSONOutputDir:  cfg.GeoJSONOutputDir,
 			TilemakerBin:      cfg.TilemakerBin,
 			TilemakerConfig:   cfg.TilemakerConfig,
 			TilemakerProcess:  cfg.TilemakerProcess,
