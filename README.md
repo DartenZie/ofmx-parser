@@ -41,6 +41,11 @@ Terrain branch:
 4. Validate coverage/seams/elevation checks/metadata consistency (`internal/output/terrain_validator.go`)
 5. Emit `terrain.manifest.json` + optional build report (`internal/output/terrain_metadata.go`)
 
+Bundle branch (optional, runs after all other branches):
+
+1. Stage all produced artifact files into temp directory
+2. Package into ZIP-based `.ofpkg` archive with manifest and checksums (`internal/output/bundle_writer.go`)
+
 Main binary entrypoint: `cmd/ofmx-parser/main.go`
 
 ## Directory Layout
@@ -109,6 +114,22 @@ go run ./cmd/ofmx-parser \
   --pmtiles-output path/to/output.pmtiles
 ```
 
+Bundle all produced artifacts into a single `.ofpkg` archive:
+
+```bash
+go run ./cmd/ofmx-parser \
+  --input path/to/input.ofmx \
+  --output path/to/output.xml \
+  --report path/to/report.json \
+  --pbf-input path/to/base.osm.pbf \
+  --pmtiles-output path/to/output.pmtiles \
+  --bundle-output path/to/output.ofpkg
+```
+
+When `--bundle-output` is specified, individual artifact files are not written to disk;
+they are staged internally and packed into the ZIP archive.
+The bundle format is documented in `docs/specification.md` (section 10).
+
 Run terrain preprocessing and PMTiles packaging (Copernicus DEM):
 
 ```bash
@@ -156,6 +177,12 @@ Supported config fields:
     - `SFC`/`AGL`/`HEI` => `FL 0`
     - `STD`/`FL` => value treated as flight level
     - `MSL`/`AMSL`/`ALT`/`FT` => value treated as feet and converted to `floor(feet/100)`
+
+Bundle-related flags:
+
+- `--bundle-output`: path to output `.ofpkg` bundle archive
+  - requires at least one artifact output (`--output`, `--pmtiles-output`, or `--terrain-pmtiles-output`)
+  - when specified, individual artifact files are not persisted to disk; they are staged internally and packed into the archive
 
 Map-related flags:
 

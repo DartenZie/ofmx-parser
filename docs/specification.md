@@ -243,3 +243,58 @@ SHOULD be accompanied by:
 - migration notes,
 - updated mapping specification,
 - regression fixtures.
+
+## 10. Bundle Format (.ofpkg)
+
+When the `--bundle-output` flag is provided, all produced artifacts are packaged into a single ZIP64-compliant archive with extension `.ofpkg`.
+
+### 10.1 Internal Layout
+
+```text
+manifest.json            (required, first entry, DEFLATE)
+payload/
+  navsnapshot.xml        (present if XML branch ran, DEFLATE)
+  map.pmtiles            (present if map branch ran, STORE)
+  terrain.pmtiles        (present if terrain branch ran, STORE)
+reports/
+  report.json            (present if --report was given, DEFLATE)
+  terrain.manifest.json  (present if terrain branch ran, DEFLATE)
+  terrain.build-report.json (present if terrain build report path was given, DEFLATE)
+checksums.sha256         (required, last entry, DEFLATE)
+```
+
+Binary blobs (`.pmtiles`) use `STORE` compression; all text files use `DEFLATE`.
+Entry order is fixed. All entries use timestamp `2001-01-01T00:00:00Z` and permissions `0644`.
+
+### 10.2 manifest.json
+
+Required attributes:
+
+- `schemaVersion` (string): manifest schema version (currently `"1.0.0"`)
+- `generatedAt` (string): RFC 3339 UTC timestamp of archive creation
+- `source` (string): always `"ofmx-parser"`
+- `artifacts` (array of objects): one entry per packaged file
+- `metadata` (object): snapshot-level fields (`cycle`, `region`)
+
+Each artifact object:
+
+- `role` (string): one of `navsnapshot`, `map-pmtiles`, `terrain-pmtiles`, `parse-report`, `terrain-manifest`, `terrain-build-report`
+- `path` (string): archive-relative path
+- `mediaType` (string): MIME type
+- `compression` (string): `"deflate"` or `"store"`
+- `sizeBytes` (integer): uncompressed file size in bytes
+- `sha256` (string): hex-encoded SHA-256 of the uncompressed file content
+
+### 10.3 checksums.sha256
+
+GNU sha256sum-compatible format (`hash  path`), one line per artifact, sorted alphabetically by path.
+Does not include `manifest.json` or `checksums.sha256` itself.
+
+### 10.4 Determinism
+
+When given identical input files and configuration, the archive SHOULD be byte-reproducible.
+This is achieved through fixed timestamps, stable entry ordering, and deterministic JSON formatting.
+
+### 10.5 Design Decision
+
+See `docs/decisions/0003-bundle-format.md` for rationale and alternatives considered.

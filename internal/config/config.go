@@ -35,6 +35,8 @@ type CLIConfig struct {
 	TilemakerProcess  string
 	MapTempDir        string
 
+	BundleOutputPath string
+
 	TerrainSourceDir               string
 	TerrainSourceChecksumsPath     string
 	TerrainAOIBBox                 string
@@ -88,6 +90,7 @@ func ParseArgs(args []string) (CLIConfig, error) {
 	tilemakerConfig := fs.String("tilemaker-config", "", "Optional tilemaker config override")
 	tilemakerProcess := fs.String("tilemaker-process", "", "Optional tilemaker process.lua override")
 	mapTempDir := fs.String("map-temp-dir", "", "Optional map generation temporary directory")
+	bundleOutput := fs.String("bundle-output", "", "Path to output .ofpkg bundle file (bundles all produced artifacts into a single ZIP archive)")
 
 	terrainSourceDir := fs.String("terrain-source-dir", "", "Directory containing Copernicus DEM source files (*.tif/*.tiff)")
 	terrainSourceChecksums := fs.String("terrain-source-checksums", "", "Optional checksum file for source DEM integrity validation")
@@ -140,6 +143,8 @@ func ParseArgs(args []string) (CLIConfig, error) {
 		TilemakerProcess:  *tilemakerProcess,
 		MapTempDir:        *mapTempDir,
 
+		BundleOutputPath: *bundleOutput,
+
 		TerrainSourceDir:               *terrainSourceDir,
 		TerrainSourceChecksumsPath:     *terrainSourceChecksums,
 		TerrainAOIBBox:                 *terrainAOIBBox,
@@ -190,8 +195,14 @@ func (c *CLIConfig) Validate() error {
 		}
 	}
 
-	if c.OutputPath == "" && c.PMTilesOutputPath == "" && c.TerrainPMTilesOutputPath == "" {
-		return domain.NewError(domain.ErrConfig, "at least one output is required: --output, --pmtiles-output, or --terrain-pmtiles-output", nil)
+	if c.OutputPath == "" && c.PMTilesOutputPath == "" && c.TerrainPMTilesOutputPath == "" && c.BundleOutputPath == "" {
+		return domain.NewError(domain.ErrConfig, "at least one output is required: --output, --pmtiles-output, --terrain-pmtiles-output, or --bundle-output", nil)
+	}
+
+	if c.BundleOutputPath != "" {
+		if c.OutputPath == "" && c.PMTilesOutputPath == "" && c.TerrainPMTilesOutputPath == "" {
+			return domain.NewError(domain.ErrConfig, "--bundle-output requires at least one artifact output (--output, --pmtiles-output, or --terrain-pmtiles-output)", nil)
+		}
 	}
 
 	if c.ArcMaxChordM <= 0 {

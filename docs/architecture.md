@@ -7,6 +7,7 @@ The parser is a CLI-first pipeline that converts OFMX input into two optional ou
 - custom XML (`NavSnapshot`),
 - PMTiles map package (selected OpenMapTiles base layers plus aviation overlays).
 - terrain PMTiles package from Copernicus DEM preprocessing.
+- single-file `.ofpkg` bundle archive packaging all produced artifacts.
 
 The architecture isolates responsibilities so mapping growth does not force broad refactors.
 
@@ -18,8 +19,8 @@ The architecture isolates responsibilities so mapping growth does not force broa
 - `internal/ingest`: input source reading/parsing
 - `internal/domain`: canonical models and typed errors
 - `internal/transform`: mapping rules from OFMX model to XML and map intermediate models
-- `internal/output`: XML/JSON/GeoJSON serialization, tilemaker invocation, terrain preprocessing/validation writers
-- `internal/pipeline`: orchestration for XML, map, and terrain export branches
+- `internal/output`: XML/JSON/GeoJSON serialization, tilemaker invocation, terrain preprocessing/validation writers, bundle packaging
+- `internal/pipeline`: orchestration for XML, map, terrain, and bundle export branches
 
 ## Data Flow
 
@@ -46,6 +47,12 @@ Terrain branch:
 3. GDAL preprocessing is executed (mosaic, nodata fill, reprojection, tile pyramid generation).
 4. PMTiles package is created and quality gates are evaluated.
 5. `terrain.manifest.json` and optional build report are emitted.
+
+Bundle branch (optional, runs after all other branches):
+
+1. All artifact branches write outputs into a staging directory.
+2. `output` packages staged files into a ZIP-based `.ofpkg` archive with manifest and checksums.
+3. Staging directory is cleaned up after archiving.
 
 ## Design Principles
 

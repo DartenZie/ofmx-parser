@@ -86,13 +86,48 @@ func runWithReader(ctx context.Context, cfg config.CLIConfig, fileCfg config.Fil
 		MaxAirspaceLowerFL:   fileCfg.EffectiveAirspaceMaxAltitudeFL(),
 	}
 
+	bundleRequested := cfg.BundleOutputPath != ""
 	xmlRequested := cfg.OutputPath != ""
 	mapRequested := cfg.PMTilesOutputPath != ""
 	terrainRequested := cfg.TerrainPMTilesOutputPath != ""
 
+	// When bundling, artifacts are written to a temp directory first, then
+	// packed into the archive. The temp directory is cleaned up afterwards
+	// so individual files do not remain on disk.
+	var bundleTmpDir string
+	if bundleRequested {
+		tmp, err := os.MkdirTemp("", "ofmx-bundle-")
+		if err != nil {
+			return domain.NewError(domain.ErrOutput, "failed to create bundle staging directory", err)
+		}
+		defer os.RemoveAll(tmp)
+		bundleTmpDir = tmp
+
+		// Redirect output paths into the staging directory.
+		if xmlRequested {
+			cfg.OutputPath = filepath.Join(bundleTmpDir, "navsnapshot.xml")
+		}
+		if cfg.ReportPath != "" {
+			cfg.ReportPath = filepath.Join(bundleTmpDir, "report.json")
+		}
+		if mapRequested {
+			cfg.PMTilesOutputPath = filepath.Join(bundleTmpDir, "map.pmtiles")
+		}
+		if terrainRequested {
+			cfg.TerrainPMTilesOutputPath = filepath.Join(bundleTmpDir, "terrain.pmtiles")
+			if cfg.TerrainManifestOutputPath != "" {
+				cfg.TerrainManifestOutputPath = filepath.Join(bundleTmpDir, "terrain.manifest.json")
+			}
+			if cfg.TerrainBuildReportOutputPath != "" {
+				cfg.TerrainBuildReportOutputPath = filepath.Join(bundleTmpDir, "terrain.build-report.json")
+			}
+		}
+	}
+
 	var (
-		doc domain.OFMXDocument
-		err error
+		doc    domain.OFMXDocument
+		err    error
+		outDoc domain.OutputDocument
 	)
 	if xmlRequested || mapRequested {
 		parseStartedAt := time.Now()
@@ -119,6 +154,7 @@ func runWithReader(ctx context.Context, cfg config.CLIConfig, fileCfg config.Fil
 		if err != nil {
 			return err
 		}
+		outDoc = result.Document
 		log.Printf("Writing XML output finished in %s", time.Since(xmlStartedAt).Round(time.Millisecond))
 
 		if cfg.ReportPath != "" {
@@ -217,5 +253,89 @@ func runWithReader(ctx context.Context, cfg config.CLIConfig, fileCfg config.Fil
 		log.Printf("Writing terrain PMTiles output finished in %s", time.Since(terrainStartedAt).Round(time.Millisecond))
 	}
 
+	if bundleRequested {
+		bundleReq := buildBundleRequest(cfg, outDoc)
+		bundleSvc := pipeline.NewBundleService(output.ZIPBundleWriter{})
+		if err := bundleSvc.Execute(ctx, bundleReq); err != nil {
+			return err
+		}
+	}
+
 	return nil
+}
+
+// buildBundleRequest collects all produced staging artifacts into a BundleRequest.
+func buildBundleRequest(cfg config.CLIConfig, outDoc domain.OutputDocument) domain.BundleRequest {
+	var entries []domain.BundleEntry
+
+	if cfg.OutputPath != "" {
+		entries = append(entries, domain.BundleEntry{
+			SourcePath:  cfg.OutputPath,
+			ArchivePath: "payload/navsnapshot.xml",
+			Role:        "navsnapshot",
+			MediaType:   "application/xml",
+			Store:       false,
+		})
+	}
+
+	if cfg.ReportPath != "" {
+		entries = append(entries, domain.BundleEntry{
+			SourcePath:  cfg.ReportPath,
+			ArchivePath: "reports/report.json",
+			Role:        "parse-report",
+			MediaType:   "application/json",
+			Store:       false,
+		})
+	}
+
+	if cfg.PMTilesOutputPath != "" {
+		entries = append(entries, domain.BundleEntry{
+			SourcePath:  cfg.PMTilesOutputPath,
+			ArchivePath: "payload/map.pmtiles",
+			Role:        "map-pmtiles",
+			MediaType:   "application/octet-stream",
+			Store:       true,
+		})
+	}
+
+	if cfg.TerrainPMTilesOutputPath != "" {
+		entries = append(entries, domain.BundleEntry{
+			SourcePath:  cfg.TerrainPMTilesOutputPath,
+			ArchivePath: "payload/terrain.pmtiles",
+			Role:        "terrain-pmtiles",
+			MediaType:   "application/octet-stream",
+			Store:       true,
+		})
+	}
+
+	if cfg.TerrainManifestOutputPath != "" {
+		entries = append(entries, domain.BundleEntry{
+			SourcePath:  cfg.TerrainManifestOutputPath,
+			ArchivePath: "reports/terrain.manifest.json",
+			Role:        "terrain-manifest",
+			MediaType:   "application/json",
+			Store:       false,
+		})
+	}
+
+	if cfg.TerrainBuildReportOutputPath != "" {
+		entries = append(entries, domain.BundleEntry{
+			SourcePath:  cfg.TerrainBuildReportOutputPath,
+			ArchivePath: "reports/terrain.build-report.json",
+			Role:        "terrain-build-report",
+			MediaType:   "application/json",
+			Store:       false,
+		})
+	}
+
+	meta := domain.BundleMetadata{
+		Cycle:  outDoc.Cycle,
+		Region: outDoc.Region,
+	}
+
+	return domain.BundleRequest{
+		OutputPath: cfg.BundleOutputPath,
+		Entries:    entries,
+		Metadata:   meta,
+	}
 }

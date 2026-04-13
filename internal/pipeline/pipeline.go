@@ -23,7 +23,8 @@ type Service struct {
 
 // Result contains pipeline execution artifacts.
 type Result struct {
-	Report domain.ParseReport
+	Report   domain.ParseReport
+	Document domain.OutputDocument
 }
 
 // New constructs a pipeline service with default semantic validation.
@@ -86,11 +87,14 @@ func (s Service) ExecuteDocument(ctx context.Context, in domain.OFMXDocument, ou
 	}
 	log.Printf("Serialized XML output in %s", time.Since(writeStartedAt).Round(time.Millisecond))
 
-	result = Result{Report: domain.ParseReport{
-		SnapshotMeta:  in.SnapshotMeta,
-		TotalFeatures: sumFeatures(in.FeatureCounts),
-		FeatureCounts: in.FeatureCounts,
-	}}
+	result = Result{
+		Report: domain.ParseReport{
+			SnapshotMeta:  in.SnapshotMeta,
+			TotalFeatures: sumFeatures(in.FeatureCounts),
+			FeatureCounts: in.FeatureCounts,
+		},
+		Document: out,
+	}
 
 	return result, nil
 }

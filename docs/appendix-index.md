@@ -47,3 +47,13 @@ Suggested citation text:
 Suggested citation text:
 
 "Appendix E defines the deterministic terrain preprocessing flow for Copernicus DEM, including integrity checks, quality gates (coverage/seams/elevation), and release metadata contracts."
+
+## Appendix F - Bundle Container Format
+
+- Document: `docs/specification.md` (section 10)
+- Decision record: `docs/decisions/0003-bundle-format.md`
+- Scope: ZIP-based single-file packaging of all pipeline outputs into `.ofpkg` archives.
+
+Suggested citation text:
+
+"Appendix F specifies the `.ofpkg` bundle container format, a ZIP-based single-file package that embeds all produced pipeline artifacts with an embedded manifest and integrity checksums."

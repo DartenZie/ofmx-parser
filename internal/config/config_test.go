@@ -216,3 +216,45 @@ func TestLoadFileRejectsAirspaceMaxAltitudeBelowMinimum(t *testing.T) {
 		t.Fatal("expected config validation error for max_altitude_fl below minimum")
 	}
 }
+
+func TestParseArgsAcceptsBundleOutputWithXML(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := ParseArgs([]string{
+		"--input", "input.ofmx",
+		"--output", "out.xml",
+		"--bundle-output", "out.ofpkg",
+	})
+	if err != nil {
+		t.Fatalf("expected valid args, got: %v", err)
+	}
+	if cfg.BundleOutputPath != "out.ofpkg" {
+		t.Fatalf("expected bundle output path out.ofpkg, got %q", cfg.BundleOutputPath)
+	}
+}
+
+func TestParseArgsRejectsBundleOutputWithoutArtifact(t *testing.T) {
+	t.Parallel()
+
+	_, err := ParseArgs([]string{
+		"--bundle-output", "out.ofpkg",
+	})
+	if err == nil {
+		t.Fatal("expected error when bundle-output is given without any artifact output")
+	}
+}
+
+func TestParseArgsAcceptsBundleOutputOnlyWithTerrainMode(t *testing.T) {
+	t.Parallel()
+
+	_, err := ParseArgs([]string{
+		"--terrain-source-dir", "copdem",
+		"--terrain-aoi-bbox", "12.0,48.0,13.0,49.0",
+		"--terrain-version", "COPDEM-30-2026-04",
+		"--terrain-pmtiles-output", "terrain.pmtiles",
+		"--bundle-output", "out.ofpkg",
+	})
+	if err != nil {
+		t.Fatalf("expected valid args, got: %v", err)
+	}
+}
