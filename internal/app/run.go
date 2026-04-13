@@ -77,9 +77,6 @@ func configPathExists(path string) bool {
 }
 
 func runWithReader(ctx context.Context, cfg config.CLIConfig, fileCfg config.FileConfig, reader ingest.OFMXReader) error {
-	parseStartedAt := time.Now()
-	log.Printf("Parsing OFMX data from %q", cfg.InputPath)
-
 	xmlMapper := transform.DefaultMapper{
 		AllowedAirspaceTypes: fileCfg.Transform.Airspace.AllowedTypes,
 		MaxAirspaceLowerFL:   fileCfg.EffectiveAirspaceMaxAltitudeFL(),
@@ -89,13 +86,26 @@ func runWithReader(ctx context.Context, cfg config.CLIConfig, fileCfg config.Fil
 		MaxAirspaceLowerFL:   fileCfg.EffectiveAirspaceMaxAltitudeFL(),
 	}
 
-	doc, err := reader.Read(ctx, cfg.InputPath)
-	if err != nil {
-		return err
-	}
-	log.Printf("Parsing OFMX data finished in %s", time.Since(parseStartedAt).Round(time.Millisecond))
+	xmlRequested := cfg.OutputPath != ""
+	mapRequested := cfg.PMTilesOutputPath != ""
+	terrainRequested := cfg.TerrainPMTilesOutputPath != ""
 
-	if cfg.OutputPath != "" {
+	var (
+		doc domain.OFMXDocument
+		err error
+	)
+	if xmlRequested || mapRequested {
+		parseStartedAt := time.Now()
+		log.Printf("Parsing OFMX data from %q", cfg.InputPath)
+
+		doc, err = reader.Read(ctx, cfg.InputPath)
+		if err != nil {
+			return err
+		}
+		log.Printf("Parsing OFMX data finished in %s", time.Since(parseStartedAt).Round(time.Millisecond))
+	}
+
+	if xmlRequested {
 		xmlStartedAt := time.Now()
 		log.Printf("Writing XML output to %q", cfg.OutputPath)
 
@@ -122,7 +132,7 @@ func runWithReader(ctx context.Context, cfg config.CLIConfig, fileCfg config.Fil
 		}
 	}
 
-	if cfg.PMTilesOutputPath != "" {
+	if mapRequested {
 		pmtilesStartedAt := time.Now()
 		log.Printf("Writing PMTiles output to %q", cfg.PMTilesOutputPath)
 
@@ -145,6 +155,66 @@ func runWithReader(ctx context.Context, cfg config.CLIConfig, fileCfg config.Fil
 			return err
 		}
 		log.Printf("Writing PMTiles output finished in %s", time.Since(pmtilesStartedAt).Round(time.Millisecond))
+	}
+
+	if terrainRequested {
+		terrainStartedAt := time.Now()
+		log.Printf("Writing terrain PMTiles output to %q", cfg.TerrainPMTilesOutputPath)
+
+		bbox, err := config.ParseBoundingBox(cfg.TerrainAOIBBox)
+		if err != nil {
+			return domain.NewError(domain.ErrConfig, "invalid terrain AOI bbox", err)
+		}
+
+		terrainReq := domain.TerrainExportRequest{
+			AOIBounds:               bbox,
+			Version:                 cfg.TerrainVersion,
+			SourceDir:               cfg.TerrainSourceDir,
+			SourceChecksumsPath:     cfg.TerrainSourceChecksumsPath,
+			PMTilesOutputPath:       cfg.TerrainPMTilesOutputPath,
+			ManifestOutputPath:      cfg.TerrainManifestOutputPath,
+			BuildReportOutputPath:   cfg.TerrainBuildReportOutputPath,
+			BuildDir:                cfg.TerrainBuildDir,
+			Encoding:                cfg.TerrainEncoding,
+			TileSize:                cfg.TerrainTileSize,
+			MinZoom:                 cfg.TerrainMinZoom,
+			MaxZoom:                 cfg.TerrainMaxZoom,
+			VerticalDatum:           cfg.TerrainVerticalDatum,
+			SchemaVersion:           cfg.TerrainSchemaVersion,
+			NodataFillMaxDistance:   cfg.TerrainNodataFillMaxDistance,
+			NodataFillSmoothingIter: cfg.TerrainNodataFillSmoothingIter,
+			SeamPixelThreshold:      uint8(cfg.TerrainSeamPixelThreshold),
+			RMSEThresholdM:          cfg.TerrainRMSEThresholdM,
+			ControlPointsPath:       cfg.TerrainControlPointsPath,
+			BuildTimestamp:          cfg.TerrainBuildTimestamp,
+			Toolchain: domain.TerrainToolchain{
+				GDALBuildVRTBin:     cfg.TerrainGDALBuildVRTBin,
+				GDALFillNodataBin:   cfg.TerrainGDALFillNodataBin,
+				GDALWarpBin:         cfg.TerrainGDALWarpBin,
+				GDALTranslateBin:    cfg.TerrainGDALTranslateBin,
+				GDALAddoBin:         cfg.TerrainGDALAddoBin,
+				GDALCalcBin:         cfg.TerrainGDALCalcBin,
+				GDALMergeBin:        cfg.TerrainGDALMergeBin,
+				GDAL2TilesBin:       cfg.TerrainGDAL2TilesBin,
+				GDALDEMBin:          cfg.TerrainGDALDEMBin,
+				GDALInfoBin:         cfg.TerrainGDALInfoBin,
+				GDALLocationInfoBin: cfg.TerrainGDALLocationInfoBin,
+				PMTilesBin:          cfg.TerrainPMTilesBin,
+			},
+		}
+
+		terrainSvc := pipeline.NewTerrainService(
+			ingest.FileDEMSourcesIngestor{},
+			transform.DefaultTerrainPlanner{},
+			output.ExecTerrainRunner{},
+			output.JSONTerrainMetadataWriter{},
+			output.DefaultTerrainValidator{},
+		)
+		if _, err := terrainSvc.Execute(ctx, terrainReq); err != nil {
+			return err
+		}
+
+		log.Printf("Writing terrain PMTiles output finished in %s", time.Since(terrainStartedAt).Round(time.Millisecond))
 	}
 
 	return nil

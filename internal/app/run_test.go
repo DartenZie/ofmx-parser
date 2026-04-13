@@ -111,3 +111,23 @@ func TestResolveConfigPathFallsBackToExample(t *testing.T) {
 		t.Fatalf("expected parser.example.yaml fallback, got %q", got)
 	}
 }
+
+func TestRunWithReaderTerrainOnlyDoesNotReadOFMX(t *testing.T) {
+	t.Parallel()
+
+	reader := &countingReader{}
+	err := runWithReader(context.Background(), config.CLIConfig{
+		TerrainSourceDir:         "copdem",
+		TerrainAOIBBox:           "12.0,48.0,13.0,49.0",
+		TerrainVersion:           "COPDEM-30-2026-04",
+		TerrainPMTilesOutputPath: filepath.Join(t.TempDir(), "terrain.pmtiles"),
+		TerrainGDALBuildVRTBin:   "missing-binary",
+	}, config.FileConfig{}, reader)
+
+	if err == nil {
+		t.Fatal("expected terrain run to fail due to missing binary")
+	}
+	if reader.reads != 0 {
+		t.Fatalf("expected no OFMX reads in terrain-only mode, got %d", reader.reads)
+	}
+}

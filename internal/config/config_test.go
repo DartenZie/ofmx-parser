@@ -19,6 +19,61 @@ func TestParseArgsAcceptsMapOnlyMode(t *testing.T) {
 	}
 }
 
+func TestParseArgsAcceptsTerrainOnlyModeWithoutInput(t *testing.T) {
+	t.Parallel()
+
+	_, err := ParseArgs([]string{
+		"--terrain-source-dir", "copdem",
+		"--terrain-aoi-bbox", "12.0,48.0,13.0,49.0",
+		"--terrain-version", "COPDEM-30-2026-04",
+		"--terrain-pmtiles-output", "terrain.pmtiles",
+	})
+	if err != nil {
+		t.Fatalf("expected valid terrain-only args, got: %v", err)
+	}
+}
+
+func TestParseArgsRejectsTerrainModeWithoutAOI(t *testing.T) {
+	t.Parallel()
+
+	_, err := ParseArgs([]string{
+		"--terrain-source-dir", "copdem",
+		"--terrain-version", "COPDEM-30-2026-04",
+		"--terrain-pmtiles-output", "terrain.pmtiles",
+	})
+	if err == nil {
+		t.Fatal("expected error when terrain aoi bbox missing")
+	}
+}
+
+func TestParseArgsRejectsInvalidTerrainTileSize(t *testing.T) {
+	t.Parallel()
+
+	_, err := ParseArgs([]string{
+		"--terrain-source-dir", "copdem",
+		"--terrain-aoi-bbox", "12.0,48.0,13.0,49.0",
+		"--terrain-version", "COPDEM-30-2026-04",
+		"--terrain-pmtiles-output", "terrain.pmtiles",
+		"--terrain-tile-size", "300",
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid terrain tile size")
+	}
+}
+
+func TestParseBoundingBoxParsesValidInput(t *testing.T) {
+	t.Parallel()
+
+	bbox, err := ParseBoundingBox("12.0,48.0,13.0,49.0")
+	if err != nil {
+		t.Fatalf("unexpected parse error: %v", err)
+	}
+
+	if bbox.MinLon != 12.0 || bbox.MinLat != 48.0 || bbox.MaxLon != 13.0 || bbox.MaxLat != 49.0 {
+		t.Fatalf("unexpected bbox parsed: %+v", bbox)
+	}
+}
+
 func TestParseArgsRejectsMapModeWithoutPBF(t *testing.T) {
 	t.Parallel()
 

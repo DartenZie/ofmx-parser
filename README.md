@@ -4,6 +4,7 @@
 
 - custom XML output for thesis-defined exchange,
 - PMTiles map output from OSM PBF plus OFMX aviation overlays.
+- terrain PMTiles output from Copernicus DEM inputs for hillshade/render-query workflows.
 
 The initial structure is intentionally layered so the mapping logic can grow without refactoring core wiring.
 
@@ -31,6 +32,14 @@ Map branch:
 2. Map into map dataset (`internal/transform/map_mapper.go`)
 3. Serialize aviation GeoJSON runtime sources (`internal/output/geojson_writer.go`)
 4. Invoke tilemaker for PMTiles generation (`internal/output/tilemaker_runner.go`)
+
+Terrain branch:
+
+1. Ingest Copernicus DEM files (`internal/ingest/dem_source_inventory.go`)
+2. Build deterministic preprocessing plan (`internal/transform/terrain_planner.go`)
+3. Run GDAL pipeline + PMTiles packaging (`internal/output/terrain_runner.go`)
+4. Validate coverage/seams/elevation checks/metadata consistency (`internal/output/terrain_validator.go`)
+5. Emit `terrain.manifest.json` + optional build report (`internal/output/terrain_metadata.go`)
 
 Main binary entrypoint: `cmd/ofmx-parser/main.go`
 
@@ -100,6 +109,18 @@ go run ./cmd/ofmx-parser \
   --pmtiles-output path/to/output.pmtiles
 ```
 
+Run terrain preprocessing and PMTiles packaging (Copernicus DEM):
+
+```bash
+go run ./cmd/ofmx-parser \
+  --terrain-source-dir path/to/copernicus-dem \
+  --terrain-aoi-bbox 12.10,48.50,18.90,51.10 \
+  --terrain-version COPDEM_GLO30_2024_1 \
+  --terrain-pmtiles-output path/to/terrain.pmtiles \
+  --terrain-manifest-output path/to/terrain.manifest.json \
+  --terrain-build-report-output path/to/build-report.json
+```
+
 Dual mode ingest behavior:
 
 - OFMX input is parsed once and reused for both XML and PMTiles branches.
@@ -149,6 +170,23 @@ Map-related flags:
   - when omitted, a temporary directory is created automatically and removed after map generation
   - when provided, generated runtime files are kept in the specified directory
 
+Terrain-related flags:
+
+- `--terrain-source-dir`: directory with Copernicus DEM `*.tif/*.tiff` source files
+- `--terrain-source-checksums`: optional checksum file (`sha256 filename`) for source integrity checks
+- `--terrain-aoi-bbox`: AOI bounds in WGS84 (`minLon,minLat,maxLon,maxLat`)
+- `--terrain-version`: source/version identifier included in manifest/report
+- `--terrain-pmtiles-output`: output PMTiles path
+- `--terrain-manifest-output`: optional terrain manifest output path (default `terrain.manifest.json` next to PMTiles)
+- `--terrain-build-report-output`: optional machine-readable build report path
+- `--terrain-min-zoom`, `--terrain-max-zoom`: terrain pyramid zoom range (default fallback matches OSM map range: `5-10`)
+- `--terrain-tile-size`: tile size (`256` or `512`)
+- `--terrain-encoding`: encoding marker in manifest (default `terrarium`)
+- `--terrain-vertical-datum`: vertical datum label in manifest (default `EGM2008`)
+- `--terrain-build-timestamp`: optional RFC3339 timestamp for deterministic metadata
+- `--terrain-control-points`: optional CSV (`lon,lat,elev_m`) for RMSE quality gate
+- `--terrain-seam-threshold`: maximum allowed edge seam pixel delta
+
 ## Testing Strategy
 
 - Unit tests for parsing, mapping, and writer components.
@@ -162,6 +200,7 @@ Map-related flags:
 - `docs/mapping-spec.md` - mapping rules from OFMX to custom XML
 - `docs/map-spec.md` - formal PMTiles layer and aviation overlay specification
 - `docs/map-pipeline-design.md` - map pipeline runtime and CLI contract
+- `docs/terrain-pipeline-design.md` - Copernicus DEM terrain preprocessing runtime contract
 - `docs/appendix-index.md` - thesis appendix index with suggested citation text
 - `docs/decisions/` - architecture decision records
 
