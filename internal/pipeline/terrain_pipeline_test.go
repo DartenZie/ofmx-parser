@@ -15,7 +15,7 @@ type fakeDEMIngestor struct {
 	err       error
 }
 
-func (f fakeDEMIngestor) Ingest(_ context.Context, _, _ string) (domain.DEMSourceInventory, error) {
+func (f fakeDEMIngestor) Ingest(_ context.Context, _, _ string, _ domain.BoundingBox) (domain.DEMSourceInventory, error) {
 	if f.err != nil {
 		return domain.DEMSourceInventory{}, f.err
 	}

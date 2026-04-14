@@ -20,22 +20,29 @@ type DefaultTerrainPlanner struct{}
 
 // Plan creates a deterministic terrain build plan for one build directory.
 func (p DefaultTerrainPlanner) Plan(_ context.Context, req domain.TerrainExportRequest, _ domain.DEMSourceInventory) (domain.TerrainBuildPlan, error) {
+	quantizedPath := ""
+	if req.ElevationQuantizationM > 0 {
+		quantizedPath = filepath.Join(req.BuildDir, "dem.quantized.tif")
+	}
 	return domain.TerrainBuildPlan{
-		MosaicVRTPath:   filepath.Join(req.BuildDir, "mosaic.vrt"),
-		FilledDEMPath:   filepath.Join(req.BuildDir, "dem.filled.tif"),
-		WarpedDEMPath:   filepath.Join(req.BuildDir, "dem.webmerc.tif"),
-		HillshadePath:   filepath.Join(req.BuildDir, "hillshade.tif"),
-		TilesDir:        filepath.Join(req.BuildDir, "tiles"),
-		AOIBounds:       req.AOIBounds,
-		Encoding:        req.Encoding,
-		TileSize:        req.TileSize,
-		MinZoom:         req.MinZoom,
-		MaxZoom:         req.MaxZoom,
-		NodataDistance:  req.NodataFillMaxDistance,
-		NodataSmoothing: req.NodataFillSmoothingIter,
-		BuildTimestamp:  req.BuildTimestamp,
-		VerticalDatum:   req.VerticalDatum,
-		SchemaVersion:   req.SchemaVersion,
-		SourceVersion:   req.Version,
+		MosaicVRTPath:          filepath.Join(req.BuildDir, "mosaic.vrt"),
+		FilledDEMPath:          filepath.Join(req.BuildDir, "dem.filled.tif"),
+		WarpedDEMPath:          filepath.Join(req.BuildDir, "dem.webmerc.tif"),
+		QuantizedDEMPath:       quantizedPath,
+		TilesDir:               filepath.Join(req.BuildDir, "tiles"),
+		AOIBounds:              req.AOIBounds,
+		Encoding:               req.Encoding,
+		TileSize:               req.TileSize,
+		MinZoom:                req.MinZoom,
+		MaxZoom:                req.MaxZoom,
+		NodataDistance:         req.NodataFillMaxDistance,
+		NodataSmoothing:        req.NodataFillSmoothingIter,
+		BuildTimestamp:         req.BuildTimestamp,
+		VerticalDatum:          req.VerticalDatum,
+		SchemaVersion:          req.SchemaVersion,
+		SourceVersion:          req.Version,
+		ElevationQuantizationM: req.ElevationQuantizationM,
+		ClipPolygonPath:        req.ClipPolygonPath,
+		ClipPolygonCountryName: req.ClipPolygonCountryName,
 	}, nil
 }

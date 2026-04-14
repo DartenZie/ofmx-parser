@@ -65,14 +65,29 @@ type CLIConfig struct {
 	TerrainGDALCalcBin         string
 	TerrainGDALMergeBin        string
 	TerrainGDAL2TilesBin       string
+	TerrainGDAL2TilesProcesses int
 	TerrainGDALDEMBin          string
 	TerrainGDALInfoBin         string
 	TerrainGDALLocationInfoBin string
 	TerrainPMTilesBin          string
+
+	// Size-reduction options.
+	TerrainElevationQuantizationM float64
+	TerrainClipPolygonPath        string
+	// TerrainClipPolygonCountryName filters border-line features by country name
+	// when converting a LineString border file to a clip polygon. When empty all
+	// features in the file are used. Ignored when the clip polygon already
+	// contains polygon geometry.
+	TerrainClipPolygonCountryName string
 }
 
-// ParseArgs parses CLI flags into CLIConfig and validates required arguments.
-func ParseArgs(args []string) (CLIConfig, error) {
+type ParsedArgs struct {
+	Config        CLIConfig
+	ExplicitFlags map[string]struct{}
+}
+
+// ParseArgs parses CLI flags and records which flags were explicitly provided.
+func ParseArgs(args []string) (ParsedArgs, error) {
 	fs := flag.NewFlagSet("ofmx-parser", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
@@ -117,13 +132,17 @@ func ParseArgs(args []string) (CLIConfig, error) {
 	terrainGDALCalc := fs.String("terrain-gdal-calc-bin", "gdal_calc.py", "gdal_calc.py binary path/name")
 	terrainGDALMerge := fs.String("terrain-gdal-merge-bin", "gdal_merge.py", "gdal_merge.py binary path/name")
 	terrainGDAL2Tiles := fs.String("terrain-gdal2tiles-bin", "gdal2tiles.py", "gdal2tiles.py binary path/name")
+	terrainGDAL2TilesProcesses := fs.Int("terrain-gdal2tiles-processes", 0, "Number of gdal2tiles.py worker processes (0 = use all CPUs)")
 	terrainGDALDEM := fs.String("terrain-gdaldem-bin", "gdaldem", "gdaldem binary path/name")
 	terrainGDALInfo := fs.String("terrain-gdalinfo-bin", "gdalinfo", "gdalinfo binary path/name")
 	terrainGDALLocationInfo := fs.String("terrain-gdallocationinfo-bin", "gdallocationinfo", "gdallocationinfo binary path/name")
 	terrainPMTilesBin := fs.String("terrain-pmtiles-bin", "pmtiles", "pmtiles binary path/name")
+	terrainElevQuantization := fs.Float64("terrain-elevation-quantization-m", 0, "Round elevation to nearest N metres before Terrarium encoding to reduce tile size (0 = disabled)")
+	terrainClipPolygon := fs.String("terrain-clip-polygon", "", "Path to GeoJSON/Shapefile polygon for clipping tiles outside AOI shape (e.g. country border)")
+	terrainClipCountryName := fs.String("terrain-clip-country-name", "", "Country name filter when converting LineString border file to clip polygon (e.g. CZECHREPUBLIC)")
 
 	if err := fs.Parse(args); err != nil {
-		return CLIConfig{}, domain.NewError(domain.ErrConfig, "invalid CLI arguments", err)
+		return ParsedArgs{}, domain.NewError(domain.ErrConfig, "invalid CLI arguments", err)
 	}
 
 	cfg := CLIConfig{
@@ -169,17 +188,23 @@ func ParseArgs(args []string) (CLIConfig, error) {
 		TerrainGDALCalcBin:         *terrainGDALCalc,
 		TerrainGDALMergeBin:        *terrainGDALMerge,
 		TerrainGDAL2TilesBin:       *terrainGDAL2Tiles,
+		TerrainGDAL2TilesProcesses: *terrainGDAL2TilesProcesses,
 		TerrainGDALDEMBin:          *terrainGDALDEM,
 		TerrainGDALInfoBin:         *terrainGDALInfo,
 		TerrainGDALLocationInfoBin: *terrainGDALLocationInfo,
 		TerrainPMTilesBin:          *terrainPMTilesBin,
+
+		TerrainElevationQuantizationM: *terrainElevQuantization,
+		TerrainClipPolygonPath:        *terrainClipPolygon,
+		TerrainClipPolygonCountryName: *terrainClipCountryName,
 	}
 
-	if err := (&cfg).Validate(); err != nil {
-		return CLIConfig{}, err
-	}
+	explicitFlags := make(map[string]struct{})
+	fs.Visit(func(f *flag.Flag) {
+		explicitFlags[f.Name] = struct{}{}
+	})
 
-	return cfg, nil
+	return ParsedArgs{Config: cfg, ExplicitFlags: explicitFlags}, nil
 }
 
 // Validate validates required CLI configuration fields.
@@ -240,6 +265,9 @@ func (c *CLIConfig) Validate() error {
 		if c.TerrainRMSEThresholdM < 0 {
 			return domain.NewError(domain.ErrConfig, "--terrain-rmse-threshold-m must be >= 0", nil)
 		}
+		if c.TerrainElevationQuantizationM < 0 {
+			return domain.NewError(domain.ErrConfig, "--terrain-elevation-quantization-m must be >= 0 (0 = disabled)", nil)
+		}
 
 		if strings.TrimSpace(c.TerrainBuildTimestampRaw) != "" {
 			ts, err := time.Parse(time.RFC3339, c.TerrainBuildTimestampRaw)
@@ -282,7 +310,78 @@ func ParseBoundingBox(raw string) (domain.BoundingBox, error) {
 
 // FileConfig stores optional file-based configuration.
 type FileConfig struct {
-	Transform TransformConfig `yaml:"transform" json:"transform"`
+	OFMX      OFMXFileConfig    `yaml:"ofmx" json:"ofmx"`
+	XML       XMLFileConfig     `yaml:"xml" json:"xml"`
+	Map       MapFileConfig     `yaml:"map" json:"map"`
+	Terrain   TerrainFileConfig `yaml:"terrain" json:"terrain"`
+	Transform TransformConfig   `yaml:"transform" json:"transform"`
+}
+
+type OFMXFileConfig struct {
+	InputPath    *string  `yaml:"input" json:"input"`
+	ArcMaxChordM *float64 `yaml:"arc_max_chord_m" json:"arc_max_chord_m"`
+}
+
+type XMLFileConfig struct {
+	OutputPath *string `yaml:"output" json:"output"`
+	ReportPath *string `yaml:"report" json:"report"`
+}
+
+type MapFileConfig struct {
+	PBFInputPath      *string             `yaml:"pbf_input" json:"pbf_input"`
+	PMTilesOutputPath *string             `yaml:"pmtiles_output" json:"pmtiles_output"`
+	GeoJSONOutputDir  *string             `yaml:"geojson_output_dir" json:"geojson_output_dir"`
+	TempDir           *string             `yaml:"temp_dir" json:"temp_dir"`
+	Tilemaker         TilemakerFileConfig `yaml:"tilemaker" json:"tilemaker"`
+}
+
+type TilemakerFileConfig struct {
+	Bin     *string `yaml:"bin" json:"bin"`
+	Config  *string `yaml:"config" json:"config"`
+	Process *string `yaml:"process" json:"process"`
+}
+
+type TerrainFileConfig struct {
+	SourceDir               *string                    `yaml:"source_dir" json:"source_dir"`
+	SourceChecksumsPath     *string                    `yaml:"source_checksums" json:"source_checksums"`
+	AOIBBox                 *string                    `yaml:"aoi_bbox" json:"aoi_bbox"`
+	Version                 *string                    `yaml:"version" json:"version"`
+	PMTilesOutputPath       *string                    `yaml:"pmtiles_output" json:"pmtiles_output"`
+	ManifestOutputPath      *string                    `yaml:"manifest_output" json:"manifest_output"`
+	BuildReportOutputPath   *string                    `yaml:"build_report_output" json:"build_report_output"`
+	BuildDir                *string                    `yaml:"build_dir" json:"build_dir"`
+	MinZoom                 *int                       `yaml:"min_zoom" json:"min_zoom"`
+	MaxZoom                 *int                       `yaml:"max_zoom" json:"max_zoom"`
+	TileSize                *int                       `yaml:"tile_size" json:"tile_size"`
+	Encoding                *string                    `yaml:"encoding" json:"encoding"`
+	VerticalDatum           *string                    `yaml:"vertical_datum" json:"vertical_datum"`
+	SchemaVersion           *string                    `yaml:"schema_version" json:"schema_version"`
+	NodataFillMaxDistance   *int                       `yaml:"nodata_fill_distance" json:"nodata_fill_distance"`
+	NodataFillSmoothingIter *int                       `yaml:"nodata_fill_smoothing" json:"nodata_fill_smoothing"`
+	SeamPixelThreshold      *int                       `yaml:"seam_threshold" json:"seam_threshold"`
+	RMSEThresholdM          *float64                   `yaml:"rmse_threshold_m" json:"rmse_threshold_m"`
+	ControlPointsPath       *string                    `yaml:"control_points" json:"control_points"`
+	BuildTimestampRaw       *string                    `yaml:"build_timestamp" json:"build_timestamp"`
+	GDAL2TilesProcesses     *int                       `yaml:"gdal2tiles_processes" json:"gdal2tiles_processes"`
+	ElevationQuantizationM  *float64                   `yaml:"elevation_quantization_m" json:"elevation_quantization_m"`
+	ClipPolygonPath         *string                    `yaml:"clip_polygon" json:"clip_polygon"`
+	ClipPolygonCountryName  *string                    `yaml:"clip_country_name" json:"clip_country_name"`
+	Toolchain               TerrainToolchainFileConfig `yaml:"toolchain" json:"toolchain"`
+}
+
+type TerrainToolchainFileConfig struct {
+	GDALBuildVRTBin     *string `yaml:"gdalbuildvrt_bin" json:"gdalbuildvrt_bin"`
+	GDALFillNodataBin   *string `yaml:"gdal_fillnodata_bin" json:"gdal_fillnodata_bin"`
+	GDALWarpBin         *string `yaml:"gdalwarp_bin" json:"gdalwarp_bin"`
+	GDALTranslateBin    *string `yaml:"gdal_translate_bin" json:"gdal_translate_bin"`
+	GDALAddoBin         *string `yaml:"gdaladdo_bin" json:"gdaladdo_bin"`
+	GDALCalcBin         *string `yaml:"gdal_calc_bin" json:"gdal_calc_bin"`
+	GDALMergeBin        *string `yaml:"gdal_merge_bin" json:"gdal_merge_bin"`
+	GDAL2TilesBin       *string `yaml:"gdal2tiles_bin" json:"gdal2tiles_bin"`
+	GDALDEMBin          *string `yaml:"gdaldem_bin" json:"gdaldem_bin"`
+	GDALInfoBin         *string `yaml:"gdalinfo_bin" json:"gdalinfo_bin"`
+	GDALLocationInfoBin *string `yaml:"gdallocationinfo_bin" json:"gdallocationinfo_bin"`
+	PMTilesBin          *string `yaml:"pmtiles_bin" json:"pmtiles_bin"`
 }
 
 type TransformConfig struct {
@@ -314,6 +413,88 @@ func (c *FileConfig) normalize() {
 	}
 
 	c.Transform.Airspace.AllowedTypes = normalized
+}
+
+// ApplyTo merges file-based settings into CLI config unless the matching CLI
+// flag was explicitly provided.
+func (c FileConfig) ApplyTo(dst *CLIConfig, explicitFlags map[string]struct{}) {
+	applyString(dst, c.OFMX.InputPath, explicitFlags, "input", func(cfg *CLIConfig, v string) { cfg.InputPath = v })
+	applyFloat64(dst, c.OFMX.ArcMaxChordM, explicitFlags, "arc-max-chord-m", func(cfg *CLIConfig, v float64) { cfg.ArcMaxChordM = v })
+
+	applyString(dst, c.XML.OutputPath, explicitFlags, "output", func(cfg *CLIConfig, v string) { cfg.OutputPath = v })
+	applyString(dst, c.XML.ReportPath, explicitFlags, "report", func(cfg *CLIConfig, v string) { cfg.ReportPath = v })
+
+	applyString(dst, c.Map.PBFInputPath, explicitFlags, "pbf-input", func(cfg *CLIConfig, v string) { cfg.PBFInputPath = v })
+	applyString(dst, c.Map.PMTilesOutputPath, explicitFlags, "pmtiles-output", func(cfg *CLIConfig, v string) { cfg.PMTilesOutputPath = v })
+	applyString(dst, c.Map.GeoJSONOutputDir, explicitFlags, "geojson-output-dir", func(cfg *CLIConfig, v string) { cfg.GeoJSONOutputDir = v })
+	applyString(dst, c.Map.TempDir, explicitFlags, "map-temp-dir", func(cfg *CLIConfig, v string) { cfg.MapTempDir = v })
+	applyString(dst, c.Map.Tilemaker.Bin, explicitFlags, "tilemaker-bin", func(cfg *CLIConfig, v string) { cfg.TilemakerBin = v })
+	applyString(dst, c.Map.Tilemaker.Config, explicitFlags, "tilemaker-config", func(cfg *CLIConfig, v string) { cfg.TilemakerConfig = v })
+	applyString(dst, c.Map.Tilemaker.Process, explicitFlags, "tilemaker-process", func(cfg *CLIConfig, v string) { cfg.TilemakerProcess = v })
+
+	applyString(dst, c.Terrain.SourceDir, explicitFlags, "terrain-source-dir", func(cfg *CLIConfig, v string) { cfg.TerrainSourceDir = v })
+	applyString(dst, c.Terrain.SourceChecksumsPath, explicitFlags, "terrain-source-checksums", func(cfg *CLIConfig, v string) { cfg.TerrainSourceChecksumsPath = v })
+	applyString(dst, c.Terrain.AOIBBox, explicitFlags, "terrain-aoi-bbox", func(cfg *CLIConfig, v string) { cfg.TerrainAOIBBox = v })
+	applyString(dst, c.Terrain.Version, explicitFlags, "terrain-version", func(cfg *CLIConfig, v string) { cfg.TerrainVersion = v })
+	applyString(dst, c.Terrain.PMTilesOutputPath, explicitFlags, "terrain-pmtiles-output", func(cfg *CLIConfig, v string) { cfg.TerrainPMTilesOutputPath = v })
+	applyString(dst, c.Terrain.ManifestOutputPath, explicitFlags, "terrain-manifest-output", func(cfg *CLIConfig, v string) { cfg.TerrainManifestOutputPath = v })
+	applyString(dst, c.Terrain.BuildReportOutputPath, explicitFlags, "terrain-build-report-output", func(cfg *CLIConfig, v string) { cfg.TerrainBuildReportOutputPath = v })
+	applyString(dst, c.Terrain.BuildDir, explicitFlags, "terrain-build-dir", func(cfg *CLIConfig, v string) { cfg.TerrainBuildDir = v })
+	applyInt(dst, c.Terrain.MinZoom, explicitFlags, "terrain-min-zoom", func(cfg *CLIConfig, v int) { cfg.TerrainMinZoom = v })
+	applyInt(dst, c.Terrain.MaxZoom, explicitFlags, "terrain-max-zoom", func(cfg *CLIConfig, v int) { cfg.TerrainMaxZoom = v })
+	applyInt(dst, c.Terrain.TileSize, explicitFlags, "terrain-tile-size", func(cfg *CLIConfig, v int) { cfg.TerrainTileSize = v })
+	applyString(dst, c.Terrain.Encoding, explicitFlags, "terrain-encoding", func(cfg *CLIConfig, v string) { cfg.TerrainEncoding = v })
+	applyString(dst, c.Terrain.VerticalDatum, explicitFlags, "terrain-vertical-datum", func(cfg *CLIConfig, v string) { cfg.TerrainVerticalDatum = v })
+	applyString(dst, c.Terrain.SchemaVersion, explicitFlags, "terrain-schema-version", func(cfg *CLIConfig, v string) { cfg.TerrainSchemaVersion = v })
+	applyInt(dst, c.Terrain.NodataFillMaxDistance, explicitFlags, "terrain-nodata-fill-distance", func(cfg *CLIConfig, v int) { cfg.TerrainNodataFillMaxDistance = v })
+	applyInt(dst, c.Terrain.NodataFillSmoothingIter, explicitFlags, "terrain-nodata-fill-smoothing", func(cfg *CLIConfig, v int) { cfg.TerrainNodataFillSmoothingIter = v })
+	applyInt(dst, c.Terrain.SeamPixelThreshold, explicitFlags, "terrain-seam-threshold", func(cfg *CLIConfig, v int) { cfg.TerrainSeamPixelThreshold = v })
+	applyFloat64(dst, c.Terrain.RMSEThresholdM, explicitFlags, "terrain-rmse-threshold-m", func(cfg *CLIConfig, v float64) { cfg.TerrainRMSEThresholdM = v })
+	applyString(dst, c.Terrain.ControlPointsPath, explicitFlags, "terrain-control-points", func(cfg *CLIConfig, v string) { cfg.TerrainControlPointsPath = v })
+	applyString(dst, c.Terrain.BuildTimestampRaw, explicitFlags, "terrain-build-timestamp", func(cfg *CLIConfig, v string) { cfg.TerrainBuildTimestampRaw = v })
+	applyInt(dst, c.Terrain.GDAL2TilesProcesses, explicitFlags, "terrain-gdal2tiles-processes", func(cfg *CLIConfig, v int) { cfg.TerrainGDAL2TilesProcesses = v })
+	applyFloat64(dst, c.Terrain.ElevationQuantizationM, explicitFlags, "terrain-elevation-quantization-m", func(cfg *CLIConfig, v float64) { cfg.TerrainElevationQuantizationM = v })
+	applyString(dst, c.Terrain.ClipPolygonPath, explicitFlags, "terrain-clip-polygon", func(cfg *CLIConfig, v string) { cfg.TerrainClipPolygonPath = v })
+	applyString(dst, c.Terrain.ClipPolygonCountryName, explicitFlags, "terrain-clip-country-name", func(cfg *CLIConfig, v string) { cfg.TerrainClipPolygonCountryName = v })
+
+	applyString(dst, c.Terrain.Toolchain.GDALBuildVRTBin, explicitFlags, "terrain-gdalbuildvrt-bin", func(cfg *CLIConfig, v string) { cfg.TerrainGDALBuildVRTBin = v })
+	applyString(dst, c.Terrain.Toolchain.GDALFillNodataBin, explicitFlags, "terrain-gdal-fillnodata-bin", func(cfg *CLIConfig, v string) { cfg.TerrainGDALFillNodataBin = v })
+	applyString(dst, c.Terrain.Toolchain.GDALWarpBin, explicitFlags, "terrain-gdalwarp-bin", func(cfg *CLIConfig, v string) { cfg.TerrainGDALWarpBin = v })
+	applyString(dst, c.Terrain.Toolchain.GDALTranslateBin, explicitFlags, "terrain-gdal-translate-bin", func(cfg *CLIConfig, v string) { cfg.TerrainGDALTranslateBin = v })
+	applyString(dst, c.Terrain.Toolchain.GDALAddoBin, explicitFlags, "terrain-gdaladdo-bin", func(cfg *CLIConfig, v string) { cfg.TerrainGDALAddoBin = v })
+	applyString(dst, c.Terrain.Toolchain.GDALCalcBin, explicitFlags, "terrain-gdal-calc-bin", func(cfg *CLIConfig, v string) { cfg.TerrainGDALCalcBin = v })
+	applyString(dst, c.Terrain.Toolchain.GDALMergeBin, explicitFlags, "terrain-gdal-merge-bin", func(cfg *CLIConfig, v string) { cfg.TerrainGDALMergeBin = v })
+	applyString(dst, c.Terrain.Toolchain.GDAL2TilesBin, explicitFlags, "terrain-gdal2tiles-bin", func(cfg *CLIConfig, v string) { cfg.TerrainGDAL2TilesBin = v })
+	applyString(dst, c.Terrain.Toolchain.GDALDEMBin, explicitFlags, "terrain-gdaldem-bin", func(cfg *CLIConfig, v string) { cfg.TerrainGDALDEMBin = v })
+	applyString(dst, c.Terrain.Toolchain.GDALInfoBin, explicitFlags, "terrain-gdalinfo-bin", func(cfg *CLIConfig, v string) { cfg.TerrainGDALInfoBin = v })
+	applyString(dst, c.Terrain.Toolchain.GDALLocationInfoBin, explicitFlags, "terrain-gdallocationinfo-bin", func(cfg *CLIConfig, v string) { cfg.TerrainGDALLocationInfoBin = v })
+	applyString(dst, c.Terrain.Toolchain.PMTilesBin, explicitFlags, "terrain-pmtiles-bin", func(cfg *CLIConfig, v string) { cfg.TerrainPMTilesBin = v })
+}
+
+func applyString(dst *CLIConfig, src *string, explicitFlags map[string]struct{}, flagName string, assign func(*CLIConfig, string)) {
+	if dst == nil || src == nil || flagExplicit(explicitFlags, flagName) {
+		return
+	}
+	assign(dst, *src)
+}
+
+func applyInt(dst *CLIConfig, src *int, explicitFlags map[string]struct{}, flagName string, assign func(*CLIConfig, int)) {
+	if dst == nil || src == nil || flagExplicit(explicitFlags, flagName) {
+		return
+	}
+	assign(dst, *src)
+}
+
+func applyFloat64(dst *CLIConfig, src *float64, explicitFlags map[string]struct{}, flagName string, assign func(*CLIConfig, float64)) {
+	if dst == nil || src == nil || flagExplicit(explicitFlags, flagName) {
+		return
+	}
+	assign(dst, *src)
+}
+
+func flagExplicit(explicitFlags map[string]struct{}, flagName string) bool {
+	_, ok := explicitFlags[flagName]
+	return ok
 }
 
 func (c FileConfig) EffectiveAirspaceMaxAltitudeFL() int {
