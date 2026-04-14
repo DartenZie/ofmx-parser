@@ -6,8 +6,10 @@ package output
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
@@ -45,9 +47,12 @@ type ExecTerrainRunner struct{}
 //  1. gdalbuildvrt    – mosaic all AOI-intersecting source files.
 //  2. gdalwarp -te    – crop+reproject to AOI in EPSG:3857 first.
 //  3. gdal_fillnodata – fill nodata on the already-cropped raster only.
-//  4. buildTerrariumRGB – single gdal_calc pass writing all 3 bands at once.
-//  5. gdal2tiles.py   – single tile pyramid, used for both PMTiles and validation.
-//  6. packTilesDirToPMTiles – write PMTiles v3 directly from tile dir (no MBTiles).
+//  4. quantizeDEM     – optional: round elevation to nearest N metres to reduce PNG entropy.
+//  5. buildTerrariumRGB – single gdal_calc pass writing all 3 bands at once.
+//  6. gdal2tiles.py   – single tile pyramid, used for both PMTiles and validation.
+//  7. clipTilesOutsidePolygon – optional: zero-out (remove) tiles that fall entirely
+//     outside the supplied clip polygon (e.g. exact country boundary).
+//  8. packTilesDirToPMTiles – write PMTiles v3 directly from tile dir (no MBTiles).
 func (r ExecTerrainRunner) Run(ctx context.Context, req domain.TerrainExportRequest, plan domain.TerrainBuildPlan, inventory domain.DEMSourceInventory) (domain.TerrainBuildArtifacts, error) {
 	if err := os.MkdirAll(req.BuildDir, 0o755); err != nil {
 		return domain.TerrainBuildArtifacts{}, domain.NewError(domain.ErrOutput, fmt.Sprintf("failed to create terrain build dir %q", req.BuildDir), err)
@@ -110,13 +115,26 @@ func (r ExecTerrainRunner) Run(ctx context.Context, req domain.TerrainExportRequ
 	// The filled, cropped raster serves as the warped DEM for downstream steps.
 	warpedDEMPath := plan.FilledDEMPath
 
-	// Step 4: Terrarium RGB encoding.
+	// Step 4 (optional): elevation quantization.
+	// Rounds each pixel to the nearest ElevationQuantizationM metres before
+	// Terrarium encoding. This dramatically reduces blue-channel entropy, making
+	// tiles significantly more compressible by PNG's DEFLATE, at the cost of
+	// sub-metre elevation precision (acceptable for 1 m quantization).
+	if plan.ElevationQuantizationM > 0 {
+		quantized, err := quantizeDEM(ctx, bin, plan.FilledDEMPath, plan.QuantizedDEMPath, plan.ElevationQuantizationM)
+		if err != nil {
+			return domain.TerrainBuildArtifacts{}, err
+		}
+		warpedDEMPath = quantized
+	}
+
+	// Step 5: Terrarium RGB encoding.
 	terrainRGBPath, err := buildTerrariumRGB(ctx, bin, req.BuildDir, warpedDEMPath)
 	if err != nil {
 		return domain.TerrainBuildArtifacts{}, err
 	}
 
-	// Step 5: Single tile pyramid via gdal2tiles (Issue #3: replaces the
+	// Step 6: Single tile pyramid via gdal2tiles (Issue #3: replaces the
 	// MBTiles+gdaladdo path as the canonical tiling step; output is used for
 	// both validation and PMTiles packaging).
 	//
@@ -143,7 +161,22 @@ func (r ExecTerrainRunner) Run(ctx context.Context, req domain.TerrainExportRequ
 		return domain.TerrainBuildArtifacts{}, err
 	}
 
-	// Step 6: Write PMTiles v3 directly from the XYZ tile directory in pure Go.
+	// Step 7 (optional): remove tiles that fall entirely outside the clip polygon.
+	// gdal2tiles always generates a full rectangular tile grid for the AOI bbox;
+	// this step deletes tiles whose coverage does not intersect the polygon at all,
+	// reducing the tile count (and thus PMTiles size) for irregularly shaped AOIs
+	// such as country outlines.
+	if plan.ClipPolygonPath != "" {
+		clipPath, err := prepareClipPolygon(ctx, req.BuildDir, plan.ClipPolygonPath, plan.ClipPolygonCountryName)
+		if err != nil {
+			return domain.TerrainBuildArtifacts{}, err
+		}
+		if err := clipTilesOutsidePolygon(ctx, bin, plan.TilesDir, clipPath, plan.MinZoom, plan.MaxZoom, plan.AOIBounds); err != nil {
+			return domain.TerrainBuildArtifacts{}, err
+		}
+	}
+
+	// Step 8: Write PMTiles v3 directly from the XYZ tile directory in pure Go.
 	// Eliminates both the MBTiles intermediate file and the pmtiles-convert
 	// subprocess call — tiles are read once from disk and written straight to
 	// the final PMTiles archive.
@@ -244,4 +277,279 @@ func buildTerrariumRGB(ctx context.Context, bin domain.TerrainToolchain, buildDi
 	}
 
 	return rgb, nil
+}
+
+// quantizeDEM rounds elevation values in a Float32/Float64 GeoTIFF to the
+// nearest multiple of stepM metres. This eliminates sub-metre noise introduced
+// by bilinear resampling, dramatically reducing the entropy of the Terrarium
+// blue channel and improving PNG DEFLATE compression ratios.
+//
+// The output is a new Float32 GeoTIFF written to outPath; nodata pixels
+// (value == -32768) are preserved unchanged.
+func quantizeDEM(ctx context.Context, bin domain.TerrainToolchain, inPath, outPath string, stepM float64) (string, error) {
+	// gdal_calc expression: round(A / step) * step, preserving nodata=-32768.
+	// where(A==-32768, -32768, round(A/step)*step)
+	// gdal_calc clips the conditional but Float32 output keeps the sign.
+	step := strconv.FormatFloat(stepM, 'f', -1, 64)
+	calcExpr := fmt.Sprintf("where(A==-32768,-32768,numpy.round(A/%s)*%s)", step, step)
+	if err := runCmd(ctx, bin.GDALCalcBin,
+		"-A", inPath,
+		"--outfile", outPath,
+		"--type", "Float32",
+		"--NoDataValue", "-32768",
+		"--format", "GTiff",
+		"--calc", calcExpr,
+	); err != nil {
+		return "", domain.NewError(domain.ErrOutput, "elevation quantization step failed", err)
+	}
+	return outPath, nil
+}
+
+// prepareClipPolygon ensures the clip polygon file is in polygon geometry form.
+// If the source file already contains Polygon or MultiPolygon geometry it is
+// returned unchanged. If it contains LineString geometry (e.g. the
+// countries_boundary.geojson produced by the map pipeline) ogr2ogr is used to
+// build a convex hull of the collected segments and the result is written to
+// buildDir/clip_polygon.geojson. countryName is an optional filter applied to
+// the "name" property of the features; when non-empty only features whose
+// name contains that string are included in the hull.
+func prepareClipPolygon(ctx context.Context, buildDir, polygonPath, countryName string) (string, error) {
+	ogrinfo := "ogrinfo"
+	if _, err := exec.LookPath(ogrinfo); err != nil {
+		return "", domain.NewError(domain.ErrOutput, "clip polygon requested but ogrinfo is not available in PATH", err)
+	}
+
+	// Detect the geometry type of the first layer.
+	cmd := exec.CommandContext(ctx, ogrinfo, "-al", "-so", polygonPath)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", domain.NewError(domain.ErrOutput,
+			fmt.Sprintf("failed to inspect clip polygon file %q: %s", polygonPath, strings.TrimSpace(string(out))), err)
+	}
+	outStr := string(out)
+
+	// Look for a "Geometry:" line in the ogrinfo summary output.
+	isLineString := false
+	for _, line := range strings.Split(outStr, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "Geometry:") {
+			geomType := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(line, "Geometry:")))
+			if strings.Contains(geomType, "line") {
+				isLineString = true
+			}
+			break
+		}
+	}
+
+	if !isLineString {
+		// Already polygon (or unknown) – use as-is.
+		return polygonPath, nil
+	}
+
+	// Build a convex-hull polygon from the LineString features using ogr2ogr
+	// with the SQLite dialect. When countryName is set only matching features
+	// are included; otherwise all features are collected.
+	outPath := buildDir + "/clip_polygon.geojson"
+
+	// Remove any stale file from a previous build so ogr2ogr does not fail.
+	_ = os.Remove(outPath)
+
+	var sqlExpr string
+	if countryName != "" {
+		sqlExpr = fmt.Sprintf(
+			"SELECT ST_ConvexHull(ST_Collect(geometry)) AS geometry FROM %s WHERE name LIKE '%%%s%%'",
+			layerNameFromPath(polygonPath), countryName,
+		)
+	} else {
+		sqlExpr = fmt.Sprintf(
+			"SELECT ST_ConvexHull(ST_Collect(geometry)) AS geometry FROM %s",
+			layerNameFromPath(polygonPath),
+		)
+	}
+
+	ogr2ogr := "ogr2ogr"
+	if _, err := exec.LookPath(ogr2ogr); err != nil {
+		return "", domain.NewError(domain.ErrOutput, "clip polygon conversion requires ogr2ogr in PATH", err)
+	}
+
+	cmd = exec.CommandContext(ctx, ogr2ogr, "-f", "GeoJSON", "-dialect", "SQLITE", "-sql", sqlExpr, "-nlt", "POLYGON", outPath, polygonPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return "", domain.NewError(domain.ErrOutput,
+			fmt.Sprintf("failed to build clip polygon from border lines: %s", strings.TrimSpace(string(out))), err)
+	}
+
+	// Verify the output actually contains a polygon feature.
+	cmd = exec.CommandContext(ctx, ogrinfo, "-al", "-so", outPath)
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		return "", domain.NewError(domain.ErrOutput,
+			fmt.Sprintf("failed to inspect generated clip polygon %q: %s", outPath, strings.TrimSpace(string(out))), err)
+	}
+	outStr = string(out)
+	hasPolygon := false
+	for _, line := range strings.Split(outStr, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "Geometry:") {
+			geomType := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(line, "Geometry:")))
+			if strings.Contains(geomType, "polygon") {
+				hasPolygon = true
+			}
+			break
+		}
+	}
+	if !hasPolygon {
+		if countryName != "" {
+			return "", domain.NewError(domain.ErrOutput,
+				fmt.Sprintf("failed to build polygon from clip border file %q using country filter %q (no polygon geometry produced)", polygonPath, countryName), nil)
+		}
+		return "", domain.NewError(domain.ErrOutput,
+			fmt.Sprintf("failed to build polygon from clip border file %q (no polygon geometry produced)", polygonPath), nil)
+	}
+
+	return outPath, nil
+}
+
+// layerNameFromPath returns the ogr2ogr layer name for a GeoJSON file.
+// For GeoJSON files produced by the map pipeline the layer name equals the
+// file base name without extension.
+func layerNameFromPath(p string) string {
+	base := filepath.Base(p)
+	if ext := filepath.Ext(base); ext != "" {
+		base = base[:len(base)-len(ext)]
+	}
+	return base
+}
+
+// clipTilesOutsidePolygon removes PNG tiles from the XYZ tile directory whose
+// geographic extent does not overlap the given polygon file (GeoJSON or
+// Shapefile). Tiles that intersect the polygon are kept; fully-outside tiles
+// are deleted from disk so they are not packed into the PMTiles archive.
+//
+// Intersection is determined by testing the tile's WGS-84 bounding box against
+// the polygon using ogr2ogr with a spatial filter: if the spatial filter
+// returns zero features the tile is outside the polygon.
+//
+// This is the primary mechanism for reducing file size when the AOI is an
+// irregular shape (e.g. country outline) rather than a simple bounding box.
+func clipTilesOutsidePolygon(ctx context.Context, bin domain.TerrainToolchain, tilesDir, polygonPath string, minZoom, maxZoom int, aoi domain.BoundingBox) error {
+	// Walk every zoom level and every tile, test intersection, delete if outside.
+	for z := minZoom; z <= maxZoom; z++ {
+		minX, maxX, minY, maxY := tileRangeForClip(aoi, z)
+		for x := minX; x <= maxX; x++ {
+			for y := minY; y <= maxY; y++ {
+				tilePath := fmt.Sprintf("%s/%d/%d/%d.png", tilesDir, z, x, y)
+				if _, err := os.Stat(tilePath); os.IsNotExist(err) {
+					continue
+				}
+				// Compute the WGS-84 extent of this tile.
+				minLon, minLat, maxLon, maxLat := tileToWGS84Bounds(x, y, z)
+				// Use ogr2ogr to do a quick spatial filter on the polygon.
+				// If no features are returned, the tile does not overlap the polygon.
+				intersects, err := tileIntersectsPolygon(ctx, bin, polygonPath, minLon, minLat, maxLon, maxLat)
+				if err != nil {
+					return domain.NewError(domain.ErrOutput,
+						fmt.Sprintf("polygon intersection check failed for tile %d/%d/%d", z, x, y), err)
+				}
+				if !intersects {
+					if err := os.Remove(tilePath); err != nil && !os.IsNotExist(err) {
+						return domain.NewError(domain.ErrOutput,
+							fmt.Sprintf("failed to remove out-of-polygon tile %s", tilePath), err)
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// tileRangeForClip returns the XY tile range for a bounding box at zoom z.
+// Mirrors the logic in the validator's tileRangeForBBox.
+func tileRangeForClip(bbox domain.BoundingBox, z int) (minX, maxX, minY, maxY int) {
+	minX, maxY = wgs84ToTileXY(bbox.MinLon, bbox.MinLat, z)
+	maxX, minY = wgs84ToTileXY(bbox.MaxLon, bbox.MaxLat, z)
+	if minX > maxX {
+		minX, maxX = maxX, minX
+	}
+	if minY > maxY {
+		minY, maxY = maxY, minY
+	}
+	return
+}
+
+// wgs84ToTileXY converts WGS-84 lon/lat to XYZ slippy-map tile coordinates.
+func wgs84ToTileXY(lon, lat float64, z int) (x, y int) {
+	n := float64(int(1) << z)
+	if lat > 85.05112878 {
+		lat = 85.05112878
+	}
+	if lat < -85.05112878 {
+		lat = -85.05112878
+	}
+	x = int(math.Floor((lon + 180.0) / 360.0 * n))
+	latRad := lat * math.Pi / 180.0
+	y = int(math.Floor((1.0 - math.Log(math.Tan(latRad)+1.0/math.Cos(latRad))/math.Pi) / 2.0 * n))
+	maxTile := int(n) - 1
+	if x < 0 {
+		x = 0
+	}
+	if x > maxTile {
+		x = maxTile
+	}
+	if y < 0 {
+		y = 0
+	}
+	if y > maxTile {
+		y = maxTile
+	}
+	return
+}
+
+// tileToWGS84Bounds returns the WGS-84 bounding box for an XYZ slippy-map tile.
+func tileToWGS84Bounds(x, y, z int) (minLon, minLat, maxLon, maxLat float64) {
+	n := float64(int(1) << z)
+	minLon = float64(x)/n*360.0 - 180.0
+	maxLon = float64(x+1)/n*360.0 - 180.0
+	maxLat = math.Atan(math.Sinh(math.Pi*(1-2*float64(y)/n))) * 180.0 / math.Pi
+	minLat = math.Atan(math.Sinh(math.Pi*(1-2*float64(y+1)/n))) * 180.0 / math.Pi
+	return
+}
+
+// tileIntersectsPolygon returns true when the tile bounding box (in WGS-84)
+// overlaps at least one feature in the polygon file.
+// It uses ogr2ogr with a -spat filter to count matching features; if ogr2ogr
+// is not available the function falls back to returning true (keep all tiles).
+func tileIntersectsPolygon(ctx context.Context, bin domain.TerrainToolchain, polygonPath string, minLon, minLat, maxLon, maxLat float64) (bool, error) {
+	// We use ogrinfo -al -so with a spatial filter; if it reports 0 features the
+	// tile is outside. ogrinfo is part of every standard GDAL installation.
+	ogrinfo := "ogrinfo"
+	if _, err := exec.LookPath(ogrinfo); err != nil {
+		return false, domain.NewError(domain.ErrOutput, "clip polygon requested but ogrinfo is not available in PATH", err)
+	}
+
+	minLonStr := strconv.FormatFloat(minLon, 'f', 8, 64)
+	minLatStr := strconv.FormatFloat(minLat, 'f', 8, 64)
+	maxLonStr := strconv.FormatFloat(maxLon, 'f', 8, 64)
+	maxLatStr := strconv.FormatFloat(maxLat, 'f', 8, 64)
+
+	cmd := exec.CommandContext(ctx, ogrinfo, "-al", "-so", "-spat", minLonStr, minLatStr, maxLonStr, maxLatStr, polygonPath)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return false, domain.NewError(domain.ErrOutput,
+			fmt.Sprintf("ogrinfo spatial filter failed for clip polygon %q: %s", polygonPath, strings.TrimSpace(string(out))), err)
+	}
+
+	// ogrinfo -so output contains "Feature Count: N" when features match.
+	outStr := string(out)
+	for _, line := range strings.Split(outStr, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "Feature Count:") {
+			rest := strings.TrimPrefix(line, "Feature Count:")
+			n, err := strconv.Atoi(strings.TrimSpace(rest))
+			if err == nil {
+				return n > 0, nil
+			}
+		}
+	}
+	return false, domain.NewError(domain.ErrOutput,
+		fmt.Sprintf("ogrinfo output did not contain parsable feature count for clip polygon %q", polygonPath), nil)
 }

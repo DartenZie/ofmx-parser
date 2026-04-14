@@ -83,6 +83,7 @@ func BuildTerrainManifest(req domain.TerrainExportRequest, inventory domain.DEMS
 		Encoding:        req.Encoding,
 		TileSize:        req.TileSize,
 		VerticalDatum:   req.VerticalDatum,
+		QuantizationM:   req.ElevationQuantizationM,
 		PMTilesChecksum: pmtilesChecksum,
 		SourceFileCount: len(inventory.Files),
 		SourceChecksums: checksums,

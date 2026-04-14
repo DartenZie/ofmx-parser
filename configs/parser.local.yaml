@@ -1,28 +1,28 @@
-# Default configuration for ofmx-parser.
+# Local configuration for ofmx-parser.
 # Precedence: built-in defaults < this file < explicit CLI flags.
-# The --config flag itself is CLI-only because it is used to locate this file.
+# Use with: --config configs/parser.local.yaml
 
 ofmx:
   # Path to the OFMX input file used by XML and/or map export.
   # Leave empty when running terrain-only mode.
-  input: ""
+  input: "cz.ofmx"
 
   # Maximum chord length in meters used when densifying OFMX arc/circle borders.
   arc_max_chord_m: 750
 
 xml:
   # Output XML file path. Leave empty to disable XML export.
-  output: ""
+  output: "dist/out.xml"
 
   # Optional parse report JSON output path.
   report: ""
 
 map:
   # OSM PBF input used by tilemaker.
-  pbf_input: ""
+  pbf_input: "cz.osm.pbf"
 
   # Output PMTiles path. Leave empty to disable map export.
-  pmtiles_output: ""
+  pmtiles_output: "dist/out.pmtiles"
 
   # Optional directory where generated GeoJSON layers are copied for debugging.
   geojson_output_dir: ""
@@ -45,20 +45,20 @@ map:
 
 terrain:
   # Directory containing Copernicus DEM source files (*.tif/*.tiff).
-  source_dir: ""
+  source_dir: "copdem"
 
   # Optional checksum file for source integrity validation.
   # Expected format: "<sha256> <filename>".
   source_checksums: ""
 
   # AOI bounding box in WGS84: minLon,minLat,maxLon,maxLat.
-  aoi_bbox: ""
+  aoi_bbox: "12.09,48.55,18.87,51.06"
 
   # Terrain source/version identifier written into manifest and report output.
-  version: ""
+  version: "1"
 
   # Output PMTiles path. Leave empty to disable terrain export.
-  pmtiles_output: ""
+  pmtiles_output: "dist/terrain.pmtiles"
 
   # Optional terrain manifest output path.
   # Leave empty to write terrain.manifest.json next to the PMTiles output.
@@ -96,7 +96,7 @@ terrain:
   nodata_fill_smoothing: 0
 
   # Maximum allowed edge seam pixel delta.
-  seam_threshold: 8
+  seam_threshold: 128
 
   # Maximum allowed RMSE for control-point elevation checks, in meters.
   rmse_threshold_m: 25.0
@@ -114,14 +114,14 @@ terrain:
 
   # Elevation quantization step in meters before Terrarium encoding.
   # 0 disables quantization.
-  elevation_quantization_m: 0
+  elevation_quantization_m: 1.0
 
   # Optional GeoJSON/Shapefile polygon used to clip tiles outside the AOI shape.
   clip_polygon: ""
 
   # Optional country-name filter used when clip_polygon points at a border
   # line file that needs to be converted into a polygon first.
-  clip_country_name: ""
+  clip_country_name: "CZECHREPUBLIC"
 
   toolchain:
     # gdalbuildvrt binary path or PATH lookup name.

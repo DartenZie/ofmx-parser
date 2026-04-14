@@ -34,7 +34,16 @@ type TerrainValidator interface {
 type DefaultTerrainValidator struct{}
 
 func (v DefaultTerrainValidator) Validate(ctx context.Context, req domain.TerrainExportRequest, artifacts domain.TerrainBuildArtifacts, manifest domain.TerrainManifest) (domain.TerrainValidationResult, error) {
-	missing, maxSeamDelta, err := coverageAndSeams(artifacts.TilesDir, req.AOIBounds, req.MinZoom, req.MaxZoom)
+	clipPolygonPath := ""
+	if strings.TrimSpace(req.ClipPolygonPath) != "" {
+		prepared, err := prepareClipPolygon(ctx, req.BuildDir, req.ClipPolygonPath, req.ClipPolygonCountryName)
+		if err != nil {
+			return domain.TerrainValidationResult{}, err
+		}
+		clipPolygonPath = prepared
+	}
+
+	missing, maxSeamDelta, err := coverageAndSeams(ctx, artifacts.TilesDir, req.AOIBounds, req.MinZoom, req.MaxZoom, clipPolygonPath, req.Toolchain)
 	if err != nil {
 		return domain.TerrainValidationResult{}, err
 	}
@@ -312,7 +321,7 @@ func runElevationChecks(ctx context.Context, req domain.TerrainExportRequest, de
 // kept alive at a time: the "current" row (y) and the "next" row (y+1). Once
 // the loop advances past a row, its images are discarded. Memory usage is
 // O(width × 2) decoded images per zoom level rather than O(width × height).
-func coverageAndSeams(root string, bbox domain.BoundingBox, minZoom, maxZoom int) (int, uint8, error) {
+func coverageAndSeams(ctx context.Context, root string, bbox domain.BoundingBox, minZoom, maxZoom int, clipPolygonPath string, tc domain.TerrainToolchain) (int, uint8, error) {
 	totalMissing := 0
 	var globalMaxDelta uint8
 
@@ -364,6 +373,17 @@ func coverageAndSeams(root string, bbox domain.BoundingBox, minZoom, maxZoom int
 			}
 
 			for x := minX; x <= maxX; x++ {
+				if clipPolygonPath != "" {
+					tMinLon, tMinLat, tMaxLon, tMaxLat := tileToWGS84Bounds(x, y, z)
+					intersects, err := tileIntersectsPolygon(ctx, tc, clipPolygonPath, tMinLon, tMinLat, tMaxLon, tMaxLat)
+					if err != nil {
+						return 0, 0, err
+					}
+					if !intersects {
+						continue
+					}
+				}
+
 				// Coverage check.
 				tilePath := filepath.Join(root, strconv.Itoa(z), strconv.Itoa(x), strconv.Itoa(y)+".png")
 				if _, err := os.Stat(tilePath); err != nil {
