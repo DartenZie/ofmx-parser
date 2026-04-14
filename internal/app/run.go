@@ -187,6 +187,7 @@ func runWithReader(ctx context.Context, cfg config.CLIConfig, fileCfg config.Fil
 			RMSEThresholdM:          cfg.TerrainRMSEThresholdM,
 			ControlPointsPath:       cfg.TerrainControlPointsPath,
 			BuildTimestamp:          cfg.TerrainBuildTimestamp,
+			GDAL2TilesProcesses:     cfg.TerrainGDAL2TilesProcesses,
 			Toolchain: domain.TerrainToolchain{
 				GDALBuildVRTBin:     cfg.TerrainGDALBuildVRTBin,
 				GDALFillNodataBin:   cfg.TerrainGDALFillNodataBin,

@@ -65,6 +65,7 @@ type CLIConfig struct {
 	TerrainGDALCalcBin         string
 	TerrainGDALMergeBin        string
 	TerrainGDAL2TilesBin       string
+	TerrainGDAL2TilesProcesses int
 	TerrainGDALDEMBin          string
 	TerrainGDALInfoBin         string
 	TerrainGDALLocationInfoBin string
@@ -117,6 +118,7 @@ func ParseArgs(args []string) (CLIConfig, error) {
 	terrainGDALCalc := fs.String("terrain-gdal-calc-bin", "gdal_calc.py", "gdal_calc.py binary path/name")
 	terrainGDALMerge := fs.String("terrain-gdal-merge-bin", "gdal_merge.py", "gdal_merge.py binary path/name")
 	terrainGDAL2Tiles := fs.String("terrain-gdal2tiles-bin", "gdal2tiles.py", "gdal2tiles.py binary path/name")
+	terrainGDAL2TilesProcesses := fs.Int("terrain-gdal2tiles-processes", 0, "Number of gdal2tiles.py worker processes (0 = use all CPUs)")
 	terrainGDALDEM := fs.String("terrain-gdaldem-bin", "gdaldem", "gdaldem binary path/name")
 	terrainGDALInfo := fs.String("terrain-gdalinfo-bin", "gdalinfo", "gdalinfo binary path/name")
 	terrainGDALLocationInfo := fs.String("terrain-gdallocationinfo-bin", "gdallocationinfo", "gdallocationinfo binary path/name")
@@ -169,6 +171,7 @@ func ParseArgs(args []string) (CLIConfig, error) {
 		TerrainGDALCalcBin:         *terrainGDALCalc,
 		TerrainGDALMergeBin:        *terrainGDALMerge,
 		TerrainGDAL2TilesBin:       *terrainGDAL2Tiles,
+		TerrainGDAL2TilesProcesses: *terrainGDAL2TilesProcesses,
 		TerrainGDALDEMBin:          *terrainGDALDEM,
 		TerrainGDALInfoBin:         *terrainGDALInfo,
 		TerrainGDALLocationInfoBin: *terrainGDALLocationInfo,

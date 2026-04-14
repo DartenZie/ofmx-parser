@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -39,6 +40,14 @@ type TerrainRunner interface {
 type ExecTerrainRunner struct{}
 
 // Run executes deterministic preprocessing, pyramid generation, and PMTiles packaging.
+//
+// Processing order (optimized):
+//  1. gdalbuildvrt    – mosaic all AOI-intersecting source files.
+//  2. gdalwarp -te    – crop+reproject to AOI in EPSG:3857 first.
+//  3. gdal_fillnodata – fill nodata on the already-cropped raster only.
+//  4. buildTerrariumRGB – single gdal_calc pass writing all 3 bands at once.
+//  5. gdal2tiles.py   – single tile pyramid, used for both PMTiles and validation.
+//  6. packTilesDirToPMTiles – write PMTiles v3 directly from tile dir (no MBTiles).
 func (r ExecTerrainRunner) Run(ctx context.Context, req domain.TerrainExportRequest, plan domain.TerrainBuildPlan, inventory domain.DEMSourceInventory) (domain.TerrainBuildArtifacts, error) {
 	if err := os.MkdirAll(req.BuildDir, 0o755); err != nil {
 		return domain.TerrainBuildArtifacts{}, domain.NewError(domain.ErrOutput, fmt.Sprintf("failed to create terrain build dir %q", req.BuildDir), err)
@@ -48,12 +57,16 @@ func (r ExecTerrainRunner) Run(ctx context.Context, req domain.TerrainExportRequ
 	}
 
 	bin := normalizeToolchain(req.Toolchain)
-	for _, path := range []string{bin.GDALBuildVRTBin, bin.GDALFillNodataBin, bin.GDALWarpBin, bin.GDALTranslateBin, bin.GDALAddoBin, bin.GDALCalcBin, bin.GDALMergeBin, bin.GDAL2TilesBin, bin.GDALDEMBin, bin.PMTilesBin} {
+	// gdal_translate: Terrarium RGB assembly (GTiff output).
+	// pmtiles: still required by the validator's `pmtiles show` call.
+	// gdaladdo and gdaldem are no longer in the critical path.
+	for _, path := range []string{bin.GDALBuildVRTBin, bin.GDALFillNodataBin, bin.GDALWarpBin, bin.GDALTranslateBin, bin.GDALCalcBin, bin.GDAL2TilesBin, bin.PMTilesBin} {
 		if _, err := exec.LookPath(path); err != nil {
 			return domain.TerrainBuildArtifacts{}, domain.NewError(domain.ErrOutput, fmt.Sprintf("terrain tool binary %q not found (strict-fail terrain mode)", path), err)
 		}
 	}
 
+	// Step 1: mosaic.
 	sources := make([]string, 0, len(inventory.Files))
 	for _, src := range inventory.Files {
 		sources = append(sources, src.Path)
@@ -64,16 +77,9 @@ func (r ExecTerrainRunner) Run(ctx context.Context, req domain.TerrainExportRequ
 		return domain.TerrainBuildArtifacts{}, err
 	}
 
-	if err := runCmd(ctx, bin.GDALFillNodataBin,
-		"-md", strconv.Itoa(plan.NodataDistance),
-		"-si", strconv.Itoa(plan.NodataSmoothing),
-		"-of", "GTiff",
-		plan.MosaicVRTPath,
-		plan.FilledDEMPath,
-	); err != nil {
-		return domain.TerrainBuildArtifacts{}, err
-	}
-
+	// Step 2: crop + reproject to AOI in EPSG:3857 first (Issue #2: nodata fill
+	// will then operate only on the AOI extent, not the full mosaic).
+	croppedDEMPath := req.BuildDir + "/dem.cropped.tif"
 	if err := runCmd(ctx, bin.GDALWarpBin,
 		"-t_srs", "EPSG:3857",
 		"-r", "bilinear",
@@ -84,84 +90,65 @@ func (r ExecTerrainRunner) Run(ctx context.Context, req domain.TerrainExportRequ
 		formatFloat(plan.AOIBounds.MaxLon),
 		formatFloat(plan.AOIBounds.MaxLat),
 		"-dstnodata", "-32768",
-		plan.FilledDEMPath,
-		plan.WarpedDEMPath,
+		plan.MosaicVRTPath,
+		croppedDEMPath,
 	); err != nil {
 		return domain.TerrainBuildArtifacts{}, err
 	}
 
-	terrainRGBPath, err := buildTerrariumRGB(ctx, bin, req.BuildDir, plan.WarpedDEMPath)
+	// Step 3: nodata fill on the cropped AOI raster only.
+	if err := runCmd(ctx, bin.GDALFillNodataBin,
+		"-md", strconv.Itoa(plan.NodataDistance),
+		"-si", strconv.Itoa(plan.NodataSmoothing),
+		"-of", "GTiff",
+		croppedDEMPath,
+		plan.FilledDEMPath,
+	); err != nil {
+		return domain.TerrainBuildArtifacts{}, err
+	}
+
+	// The filled, cropped raster serves as the warped DEM for downstream steps.
+	warpedDEMPath := plan.FilledDEMPath
+
+	// Step 4: Terrarium RGB encoding.
+	terrainRGBPath, err := buildTerrariumRGB(ctx, bin, req.BuildDir, warpedDEMPath)
 	if err != nil {
 		return domain.TerrainBuildArtifacts{}, err
 	}
-	mbtilesPath := req.BuildDir + "/terrain.mbtiles"
-	if err := runCmd(ctx, bin.GDALTranslateBin,
-		"-of", "MBTILES",
-		"-co", "TILE_FORMAT=PNG",
-		"-co", "RESAMPLING=NEAREST",
-		"-co", "BLOCKSIZE="+strconv.Itoa(plan.TileSize),
-		"-co", "MINZOOM="+strconv.Itoa(plan.MinZoom),
-		"-co", "MAXZOOM="+strconv.Itoa(plan.MaxZoom),
-		terrainRGBPath,
-		mbtilesPath,
-	); err != nil {
-		return domain.TerrainBuildArtifacts{}, err
-	}
 
-	if plan.MaxZoom > plan.MinZoom {
-		addoArgs := []string{"-r", "average", mbtilesPath}
-		factor := 2
-		for i := 0; i < 12; i++ {
-			addoArgs = append(addoArgs, strconv.Itoa(factor))
-			factor *= 2
-		}
-		if err := runCmd(ctx, bin.GDALAddoBin, addoArgs...); err != nil {
-			return domain.TerrainBuildArtifacts{}, err
-		}
+	// Step 5: Single tile pyramid via gdal2tiles (Issue #3: replaces the
+	// MBTiles+gdaladdo path as the canonical tiling step; output is used for
+	// both validation and PMTiles packaging).
+	//
+	// Parallelism defaults to all available CPUs (Issue #4).
+	processes := req.GDAL2TilesProcesses
+	if processes <= 0 {
+		processes = runtime.NumCPU()
 	}
-
+	// --resampling near is required for Terrarium-encoded data. The RGB bytes
+	// encode elevation non-linearly (R carries 256m per unit). Averaging across
+	// an R-band boundary (e.g. R=127 and R=128) produces a byte average that
+	// decodes to a wrong elevation, causing apparent 100+ m seam discontinuities
+	// at tile edges. Nearest-neighbour copies source pixels exactly, so tile
+	// edges remain true samples with no interpolation artefacts.
 	if err := runCmd(ctx, bin.GDAL2TilesBin,
 		"--xyz",
+		"--resampling", "near",
 		"--tilesize", strconv.Itoa(plan.TileSize),
 		"--zoom", fmt.Sprintf("%d-%d", plan.MinZoom, plan.MaxZoom),
-		"--processes", "1",
+		"--processes", strconv.Itoa(processes),
 		terrainRGBPath,
 		plan.TilesDir,
 	); err != nil {
 		return domain.TerrainBuildArtifacts{}, err
 	}
 
-	if err := runCmd(ctx, bin.GDALDEMBin,
-		"hillshade",
-		plan.WarpedDEMPath,
-		plan.HillshadePath,
-		"-z", "1.0",
-		"-az", "315",
-		"-alt", "45",
-	); err != nil {
-		return domain.TerrainBuildArtifacts{}, err
-	}
-
-	rawPMTilesPath := req.BuildDir + "/terrain.raw.pmtiles"
-	if err := runCmd(ctx, bin.PMTilesBin, "convert", mbtilesPath, rawPMTilesPath); err != nil {
-		return domain.TerrainBuildArtifacts{}, err
-	}
-
-	bbox := fmt.Sprintf("%s,%s,%s,%s",
-		formatFloat(plan.AOIBounds.MinLon),
-		formatFloat(plan.AOIBounds.MinLat),
-		formatFloat(plan.AOIBounds.MaxLon),
-		formatFloat(plan.AOIBounds.MaxLat),
-	)
-	if err := runCmd(ctx, bin.PMTilesBin,
-		"extract",
-		rawPMTilesPath,
-		req.PMTilesOutputPath,
-		"--bbox="+bbox,
-		"--minzoom="+strconv.Itoa(plan.MinZoom),
-		"--maxzoom="+strconv.Itoa(plan.MaxZoom),
-	); err != nil {
-		return domain.TerrainBuildArtifacts{}, err
+	// Step 6: Write PMTiles v3 directly from the XYZ tile directory in pure Go.
+	// Eliminates both the MBTiles intermediate file and the pmtiles-convert
+	// subprocess call — tiles are read once from disk and written straight to
+	// the final PMTiles archive.
+	if err := packTilesDirToPMTiles(plan.TilesDir, req.PMTilesOutputPath, plan.MinZoom, plan.MaxZoom, plan.AOIBounds); err != nil {
+		return domain.TerrainBuildArtifacts{}, domain.NewError(domain.ErrOutput, "failed to write PMTiles from tile dir", err)
 	}
 
 	if _, err := os.Stat(req.PMTilesOutputPath); err != nil {
@@ -172,8 +159,7 @@ func (r ExecTerrainRunner) Run(ctx context.Context, req domain.TerrainExportRequ
 		PMTilesPath:   req.PMTilesOutputPath,
 		TilesDir:      plan.TilesDir,
 		FilledDEMPath: plan.FilledDEMPath,
-		WarpedDEMPath: plan.WarpedDEMPath,
-		HillshadePath: plan.HillshadePath,
+		WarpedDEMPath: warpedDEMPath,
 	}, nil
 }
 
@@ -231,57 +217,28 @@ func formatFloat(v float64) string {
 	return strconv.FormatFloat(v, 'f', 8, 64)
 }
 
+// buildTerrariumRGB encodes the warped DEM as a 3-band Terrarium RGB GeoTIFF
+// in a single gdal_calc.py invocation. The previous implementation used three
+// separate gdal_calc passes (one per band) plus gdalbuildvrt + gdal_translate,
+// reading the DEM five times total. A single pass with three --calc expressions
+// reads the DEM once and writes all bands together.
 func buildTerrariumRGB(ctx context.Context, bin domain.TerrainToolchain, buildDir, warpedDEMPath string) (string, error) {
-	rBand := buildDir + "/terrarium_r.tif"
-	gBand := buildDir + "/terrarium_g.tif"
-	bBand := buildDir + "/terrarium_b.tif"
-	rgbVRT := buildDir + "/terrarium_rgb.vrt"
 	rgb := buildDir + "/terrarium_rgb.tif"
 
+	// Three --calc expressions in one call produce a 3-band output GeoTIFF.
+	// Band ordering: R=1, G=2, B=3.
+	//   R = floor((elev+32768) / 256)          (high byte)
+	//   G = floor((elev+32768) mod 256)         (middle byte)
+	//   B = floor(frac(elev+32768) * 256)       (fractional byte)
 	if err := runCmd(ctx, bin.GDALCalcBin,
 		"-A", warpedDEMPath,
-		"--outfile", rBand,
+		"--outfile", rgb,
 		"--type", "Byte",
 		"--NoDataValue", "0",
+		"--format", "GTiff",
 		"--calc", "clip(floor((A+32768)/256),0,255)",
-	); err != nil {
-		return "", err
-	}
-
-	if err := runCmd(ctx, bin.GDALCalcBin,
-		"-A", warpedDEMPath,
-		"--outfile", gBand,
-		"--type", "Byte",
-		"--NoDataValue", "0",
 		"--calc", "clip(floor((A+32768)-floor((A+32768)/256)*256),0,255)",
-	); err != nil {
-		return "", err
-	}
-
-	if err := runCmd(ctx, bin.GDALCalcBin,
-		"-A", warpedDEMPath,
-		"--outfile", bBand,
-		"--type", "Byte",
-		"--NoDataValue", "0",
 		"--calc", "clip(floor(((A+32768)-floor(A+32768))*256),0,255)",
-	); err != nil {
-		return "", err
-	}
-
-	if err := runCmd(ctx, bin.GDALBuildVRTBin,
-		"-separate",
-		rgbVRT,
-		rBand,
-		gBand,
-		bBand,
-	); err != nil {
-		return "", err
-	}
-
-	if err := runCmd(ctx, bin.GDALTranslateBin,
-		"-of", "GTiff",
-		rgbVRT,
-		rgb,
 	); err != nil {
 		return "", err
 	}

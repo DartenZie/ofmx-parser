@@ -60,7 +60,7 @@ func (s TerrainService) Execute(ctx context.Context, req domain.TerrainExportReq
 		req.ManifestOutputPath = filepath.Join(filepath.Dir(req.PMTilesOutputPath), "terrain.manifest.json")
 	}
 
-	inventory, err := s.ingestor.Ingest(ctx, req.SourceDir, req.SourceChecksumsPath)
+	inventory, err := s.ingestor.Ingest(ctx, req.SourceDir, req.SourceChecksumsPath, req.AOIBounds)
 	if err != nil {
 		return domain.TerrainBuildReport{}, err
 	}
@@ -75,6 +75,17 @@ func (s TerrainService) Execute(ctx context.Context, req domain.TerrainExportReq
 		return domain.TerrainBuildReport{}, err
 	}
 
+	// Run validation before computing the PMTiles checksum so that a failed
+	// quality gate does not pay the cost of hashing a large file (Issue #5).
+	// Pass an empty checksum into the manifest for the validation call; the
+	// manifest is rewritten with the real checksum once validation passes.
+	scratchManifest := output.BuildTerrainManifest(req, inventory, "")
+	validation, err := s.validator.Validate(ctx, req, artifacts, scratchManifest)
+	if err != nil {
+		return domain.TerrainBuildReport{}, err
+	}
+
+	// Validation passed — now compute the checksum and write the final manifest.
 	pmtilesChecksum, err := output.SHA256File(artifacts.PMTilesPath)
 	if err != nil {
 		return domain.TerrainBuildReport{}, domain.NewError(domain.ErrOutput, "failed to compute PMTiles checksum", err)
@@ -82,11 +93,6 @@ func (s TerrainService) Execute(ctx context.Context, req domain.TerrainExportReq
 
 	manifest := output.BuildTerrainManifest(req, inventory, pmtilesChecksum)
 	if err := s.meta.WriteManifest(ctx, req.ManifestOutputPath, manifest); err != nil {
-		return domain.TerrainBuildReport{}, err
-	}
-
-	validation, err := s.validator.Validate(ctx, req, artifacts, manifest)
-	if err != nil {
 		return domain.TerrainBuildReport{}, err
 	}
 

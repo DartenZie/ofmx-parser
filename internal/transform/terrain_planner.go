@@ -24,7 +24,6 @@ func (p DefaultTerrainPlanner) Plan(_ context.Context, req domain.TerrainExportR
 		MosaicVRTPath:   filepath.Join(req.BuildDir, "mosaic.vrt"),
 		FilledDEMPath:   filepath.Join(req.BuildDir, "dem.filled.tif"),
 		WarpedDEMPath:   filepath.Join(req.BuildDir, "dem.webmerc.tif"),
-		HillshadePath:   filepath.Join(req.BuildDir, "hillshade.tif"),
 		TilesDir:        filepath.Join(req.BuildDir, "tiles"),
 		AOIBounds:       req.AOIBounds,
 		Encoding:        req.Encoding,

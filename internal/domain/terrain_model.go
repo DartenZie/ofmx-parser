@@ -27,6 +27,7 @@ type TerrainExportRequest struct {
 	RMSEThresholdM          float64
 	ControlPointsPath       string
 	BuildTimestamp          time.Time
+	GDAL2TilesProcesses     int
 	Toolchain               TerrainToolchain
 }
 
@@ -72,7 +73,6 @@ type TerrainBuildPlan struct {
 	MosaicVRTPath   string
 	FilledDEMPath   string
 	WarpedDEMPath   string
-	HillshadePath   string
 	TilesDir        string
 	AOIBounds       BoundingBox
 	Encoding        string
@@ -93,7 +93,6 @@ type TerrainBuildArtifacts struct {
 	TilesDir      string
 	FilledDEMPath string
 	WarpedDEMPath string
-	HillshadePath string
 }
 
 // TerrainManifest is the machine-readable terrain release metadata.
@@ -121,7 +120,7 @@ type TerrainValidationResult struct {
 	RMSEm                 float64 `json:"rmse_m"`
 	ControlPointsCompared int     `json:"control_points_compared"`
 	ElevationChecksOK     bool    `json:"elevation_checks_ok"`
-	HillshadeOK           bool    `json:"hillshade_ok"`
+	RasterSanityOK        bool    `json:"raster_sanity_ok"`
 	MetadataConsistencyOK bool    `json:"metadata_consistency_ok"`
 }
 
