@@ -37,6 +37,10 @@ XML and map branches may run independently or together. In dual mode, OFMX inges
 
 Map mode uses these flags:
 
+The same runtime settings may also be loaded from the grouped YAML config file
+under `ofmx` and `map`. When both sources are present, explicit CLI flags
+override YAML values.
+
 - `--pbf-input <path>`: OSM PBF input for tilemaker.
 - `--pmtiles-output <path>`: target PMTiles output path.
 - `--arc-max-chord-m <meters>`: optional arc/circle densification chord limit (default `750`).

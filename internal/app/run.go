@@ -30,10 +30,11 @@ func Run(ctx context.Context, args []string) (runErr error) {
 		log.Printf("Completed all requested work in %s", duration)
 	}()
 
-	cfg, err := config.ParseArgs(args)
+	parsed, err := config.ParseArgs(args)
 	if err != nil {
 		return err
 	}
+	cfg := parsed.Config
 
 	fileCfg := config.FileConfig{}
 	configPath := resolveConfigPath(cfg.ConfigPath, configPathExists)
@@ -44,6 +45,11 @@ func Run(ctx context.Context, args []string) (runErr error) {
 			return err
 		}
 		fileCfg = loadedCfg
+		fileCfg.ApplyTo(&cfg, parsed.ExplicitFlags)
+	}
+
+	if err := cfg.Validate(); err != nil {
+		return err
 	}
 
 	runErr = runWithReader(ctx, cfg, fileCfg, ingest.FileReader{ArcMaxChordLengthMeters: cfg.ArcMaxChordM})
@@ -187,7 +193,8 @@ func runWithReader(ctx context.Context, cfg config.CLIConfig, fileCfg config.Fil
 			output.GeoJSONFileWriter{},
 			output.ExecTilemakerRunner{},
 		)
-		if _, err := mapSvc.Execute(ctx, doc, mapReq); err != nil {
+		_, err = mapSvc.Execute(ctx, doc, mapReq)
+		if err != nil {
 			return err
 		}
 		log.Printf("Writing PMTiles output finished in %s", time.Since(pmtilesStartedAt).Round(time.Millisecond))
@@ -223,6 +230,10 @@ func runWithReader(ctx context.Context, cfg config.CLIConfig, fileCfg config.Fil
 			RMSEThresholdM:          cfg.TerrainRMSEThresholdM,
 			ControlPointsPath:       cfg.TerrainControlPointsPath,
 			BuildTimestamp:          cfg.TerrainBuildTimestamp,
+			GDAL2TilesProcesses:     cfg.TerrainGDAL2TilesProcesses,
+			ElevationQuantizationM:  cfg.TerrainElevationQuantizationM,
+			ClipPolygonPath:         cfg.TerrainClipPolygonPath,
+			ClipPolygonCountryName:  cfg.TerrainClipPolygonCountryName,
 			Toolchain: domain.TerrainToolchain{
 				GDALBuildVRTBin:     cfg.TerrainGDALBuildVRTBin,
 				GDALFillNodataBin:   cfg.TerrainGDALFillNodataBin,

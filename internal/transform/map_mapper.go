@@ -123,6 +123,12 @@ func (m DefaultMapMapper) MapToMapDataset(_ context.Context, input domain.OFMXDo
 	for _, v := range input.NDBs {
 		dataset.PointsOfInterest = append(dataset.PointsOfInterest, mapNavaidPOI(v.ID, "NDB", firstNonEmpty(v.Name, v.ID), v.Lat, v.Lon))
 	}
+	for _, v := range input.VORs {
+		dataset.PointsOfInterest = append(dataset.PointsOfInterest, mapNavaidPOI(v.ID, "VOR", firstNonEmpty(v.Name, v.ID), v.Lat, v.Lon))
+	}
+	for _, v := range input.DMEs {
+		dataset.PointsOfInterest = append(dataset.PointsOfInterest, mapNavaidPOI(v.ID, "DME", firstNonEmpty(v.Name, v.ID), v.Lat, v.Lon))
+	}
 	for _, v := range input.TACANs {
 		dataset.PointsOfInterest = append(dataset.PointsOfInterest, mapNavaidPOI(v.ID, "TACAN", firstNonEmpty(v.Name, v.ID), v.Lat, v.Lon))
 	}
@@ -715,15 +721,19 @@ func mapNavaidPOI(id, kind, defaultName string, lat, lon float64) domain.MapPOI 
 
 func vocalicNavaidName(id string) (string, bool) {
 	trimmed := strings.TrimSpace(id)
-	if len([]rune(trimmed)) != 1 {
+	if trimmed == "" {
 		return trimmed, false
 	}
 
-	r := []rune(strings.ToUpper(trimmed))[0]
-	word, ok := navaidPhoneticAlphabet[r]
-	if !ok {
-		return trimmed, false
+	runes := []rune(strings.ToUpper(trimmed))
+	words := make([]string, 0, len(runes))
+	for _, r := range runes {
+		word, ok := navaidPhoneticAlphabet[r]
+		if !ok {
+			return trimmed, false
+		}
+		words = append(words, word)
 	}
 
-	return word, true
+	return strings.Join(words, " "), true
 }

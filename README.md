@@ -149,7 +149,7 @@ Dual mode ingest behavior:
 Optional config file path:
 
 ```bash
-go run ./cmd/ofmx-parser --input path/to/input.ofmx --output path/to/output.xml --config configs/parser.example.yaml
+go run ./cmd/ofmx-parser --config configs/parser.example.yaml --output path/to/output.xml
 ```
 
 Config auto-discovery (when `--config` is omitted):
@@ -164,55 +164,35 @@ The first existing file is loaded.
 
 Example file: `configs/parser.example.yaml`
 
-Supported config fields:
+The file is grouped into these sections:
 
-- `transform.airspace.allowed_types`: optional replacement list for exported `Ase/AseUid/codeType` values.
-  - If omitted, built-in defaults are used.
-  - If provided, it replaces defaults for both XML airspace export and map zone/border export.
-  - Values are normalized to uppercase and deduplicated.
-- `transform.airspace.max_altitude_fl`: optional maximum allowed lower airspace limit in flight levels.
-  - Default is `95`.
-  - Minimum allowed value is `95`.
-  - Lower limit conversion rules:
-    - `SFC`/`AGL`/`HEI` => `FL 0`
-    - `STD`/`FL` => value treated as flight level
-    - `MSL`/`AMSL`/`ALT`/`FT` => value treated as feet and converted to `floor(feet/100)`
+- `ofmx`: shared OFMX input settings, including `input` and `arc_max_chord_m`.
+- `xml`: XML output settings such as `output` and `report`.
+- `map`: PMTiles map settings including `pbf_input`, `pmtiles_output`, `geojson_output_dir`, `temp_dir`, and nested `tilemaker` overrides.
+- `terrain`: Copernicus DEM terrain settings, including output paths, zoom/tile parameters, quality gates, clipping options, and nested `toolchain` binary paths.
+- `transform`: transformation rules such as airspace allowlist filtering and lower-limit thresholding.
 
-Bundle-related flags:
+All current defaults are written explicitly in `configs/parser.example.yaml` together with inline comments.
 
-- `--bundle-output`: path to output `.ofpkg` bundle archive
-  - requires at least one artifact output (`--output`, `--pmtiles-output`, or `--terrain-pmtiles-output`)
-  - when specified, individual artifact files are not persisted to disk; they are staged internally and packed into the archive
+Config precedence is:
 
-Map-related flags:
+1. Built-in defaults.
+2. Values loaded from the YAML config file.
+3. Explicit CLI flags.
 
-- `--arc-max-chord-m`: maximum chord length (meters) for OFMX arc/circle densification (default: `750`)
-- `--pbf-input`: OSM PBF input path for tilemaker
-- `--pmtiles-output`: PMTiles output path
-- `--tilemaker-bin`: tilemaker binary path/name (default: `tilemaker`)
-- `--tilemaker-config`: optional custom tilemaker config override
-- `--tilemaker-process`: optional custom tilemaker process.lua override
-- `--geojson-output-dir`: optional directory where only generated GeoJSON layer files are copied for debugging
-- `--map-temp-dir`: optional temp directory for generated GeoJSON/config/process files
-  - when omitted, a temporary directory is created automatically and removed after map generation
-  - when provided, generated runtime files are kept in the specified directory
+This means the config file can fully drive a run by itself, while any flag you pass on the command line still overrides the matching YAML field.
 
-Terrain-related flags:
+Example config-driven XML run:
 
-- `--terrain-source-dir`: directory with Copernicus DEM `*.tif/*.tiff` source files
-- `--terrain-source-checksums`: optional checksum file (`sha256 filename`) for source integrity checks
-- `--terrain-aoi-bbox`: AOI bounds in WGS84 (`minLon,minLat,maxLon,maxLat`)
-- `--terrain-version`: source/version identifier included in manifest/report
-- `--terrain-pmtiles-output`: output PMTiles path
-- `--terrain-manifest-output`: optional terrain manifest output path (default `terrain.manifest.json` next to PMTiles)
-- `--terrain-build-report-output`: optional machine-readable build report path
-- `--terrain-min-zoom`, `--terrain-max-zoom`: terrain pyramid zoom range (default fallback matches OSM map range: `5-10`)
-- `--terrain-tile-size`: tile size (`256` or `512`)
-- `--terrain-encoding`: encoding marker in manifest (default `terrarium`)
-- `--terrain-vertical-datum`: vertical datum label in manifest (default `EGM2008`)
-- `--terrain-build-timestamp`: optional RFC3339 timestamp for deterministic metadata
-- `--terrain-control-points`: optional CSV (`lon,lat,elev_m`) for RMSE quality gate
-- `--terrain-seam-threshold`: maximum allowed edge seam pixel delta
+```bash
+go run ./cmd/ofmx-parser --config configs/parser.example.yaml
+```
+
+Example overriding just one value from the config file:
+
+```bash
+go run ./cmd/ofmx-parser --config configs/parser.example.yaml --output path/to/output.xml
+```
 
 ## Testing Strategy
 

@@ -27,7 +27,25 @@ type TerrainExportRequest struct {
 	RMSEThresholdM          float64
 	ControlPointsPath       string
 	BuildTimestamp          time.Time
-	Toolchain               TerrainToolchain
+	GDAL2TilesProcesses     int
+	// ElevationQuantizationM rounds elevation values to the nearest multiple of
+	// this value (in metres) before Terrarium RGB encoding. This reduces blue-
+	// channel entropy and improves PNG compression. Set to 0 to disable
+	// quantization (default). Typical values: 0.5, 1.0, 2.0.
+	ElevationQuantizationM float64
+	// ClipPolygonPath is an optional path to a GeoJSON or Shapefile polygon
+	// used to mask tiles outside the AOI border (e.g. exact country outline).
+	// When empty, all tiles within the AOI bounding box are included.
+	// If the file contains LineString geometry (e.g. the countries_boundary.geojson
+	// produced by the map pipeline) it is automatically converted to a convex-hull
+	// polygon before use; see ClipPolygonCountryName.
+	ClipPolygonPath string
+	// ClipPolygonCountryName is an optional filter applied when converting a
+	// LineString border file to a clip polygon. Only features whose "name"
+	// property contains this string (case-sensitive) are included in the convex
+	// hull. When empty, all features in the file are used.
+	ClipPolygonCountryName string
+	Toolchain              TerrainToolchain
 }
 
 // BoundingBox stores WGS84 AOI bounds.
@@ -69,22 +87,25 @@ type DEMSourceInventory struct {
 
 // TerrainBuildPlan captures deterministic preprocessing choices.
 type TerrainBuildPlan struct {
-	MosaicVRTPath   string
-	FilledDEMPath   string
-	WarpedDEMPath   string
-	HillshadePath   string
-	TilesDir        string
-	AOIBounds       BoundingBox
-	Encoding        string
-	TileSize        int
-	MinZoom         int
-	MaxZoom         int
-	NodataDistance  int
-	NodataSmoothing int
-	BuildTimestamp  time.Time
-	VerticalDatum   string
-	SchemaVersion   string
-	SourceVersion   string
+	MosaicVRTPath          string
+	FilledDEMPath          string
+	WarpedDEMPath          string
+	QuantizedDEMPath       string // set only when ElevationQuantizationM > 0
+	TilesDir               string
+	AOIBounds              BoundingBox
+	Encoding               string
+	TileSize               int
+	MinZoom                int
+	MaxZoom                int
+	NodataDistance         int
+	NodataSmoothing        int
+	BuildTimestamp         time.Time
+	VerticalDatum          string
+	SchemaVersion          string
+	SourceVersion          string
+	ElevationQuantizationM float64
+	ClipPolygonPath        string
+	ClipPolygonCountryName string
 }
 
 // TerrainBuildArtifacts contains runtime artifacts produced by the runner.
@@ -93,23 +114,24 @@ type TerrainBuildArtifacts struct {
 	TilesDir      string
 	FilledDEMPath string
 	WarpedDEMPath string
-	HillshadePath string
 }
 
 // TerrainManifest is the machine-readable terrain release metadata.
 type TerrainManifest struct {
-	SchemaVersion   string     `json:"schema_version"`
-	Version         string     `json:"source_version"`
-	BuildTimestamp  string     `json:"build_timestamp"`
-	Bounds          [4]float64 `json:"bounds"`
-	MinZoom         int        `json:"min_zoom"`
-	MaxZoom         int        `json:"max_zoom"`
-	Encoding        string     `json:"encoding"`
-	TileSize        int        `json:"tile_size"`
-	VerticalDatum   string     `json:"vertical_datum"`
-	PMTilesChecksum string     `json:"pmtiles_sha256"`
-	SourceFileCount int        `json:"source_file_count"`
-	SourceChecksums []string   `json:"source_checksums"`
+	SchemaVersion  string     `json:"schema_version"`
+	Version        string     `json:"source_version"`
+	BuildTimestamp string     `json:"build_timestamp"`
+	Bounds         [4]float64 `json:"bounds"`
+	MinZoom        int        `json:"min_zoom"`
+	MaxZoom        int        `json:"max_zoom"`
+	Encoding       string     `json:"encoding"`
+	TileSize       int        `json:"tile_size"`
+	VerticalDatum  string     `json:"vertical_datum"`
+	// QuantizationM is the elevation quantization step used during build (0 = none).
+	QuantizationM   float64  `json:"quantization_m,omitempty"`
+	PMTilesChecksum string   `json:"pmtiles_sha256"`
+	SourceFileCount int      `json:"source_file_count"`
+	SourceChecksums []string `json:"source_checksums"`
 }
 
 // TerrainValidationResult contains quality gate outputs.
@@ -121,7 +143,7 @@ type TerrainValidationResult struct {
 	RMSEm                 float64 `json:"rmse_m"`
 	ControlPointsCompared int     `json:"control_points_compared"`
 	ElevationChecksOK     bool    `json:"elevation_checks_ok"`
-	HillshadeOK           bool    `json:"hillshade_ok"`
+	RasterSanityOK        bool    `json:"raster_sanity_ok"`
 	MetadataConsistencyOK bool    `json:"metadata_consistency_ok"`
 }
 

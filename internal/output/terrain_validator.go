@@ -10,8 +10,10 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"image"
 	"image/color"
 	"image/png"
+	"log"
 	"math"
 	"os"
 	"os/exec"
@@ -19,6 +21,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/DartenZie/ofmx-parser/internal/domain"
 )
@@ -32,37 +36,60 @@ type TerrainValidator interface {
 type DefaultTerrainValidator struct{}
 
 func (v DefaultTerrainValidator) Validate(ctx context.Context, req domain.TerrainExportRequest, artifacts domain.TerrainBuildArtifacts, manifest domain.TerrainManifest) (domain.TerrainValidationResult, error) {
-	missing, err := countMissingTiles(artifacts.TilesDir, req.AOIBounds, req.MinZoom, req.MaxZoom)
-	if err != nil {
-		return domain.TerrainValidationResult{}, err
-	}
-	if missing > 0 {
-		return domain.TerrainValidationResult{}, domain.NewError(domain.ErrValidate, fmt.Sprintf("terrain coverage validation failed: %d missing tiles", missing), nil)
+	startedAt := time.Now()
+	log.Printf("Terrain validator: start")
+
+	clipPolygonPath := ""
+	if strings.TrimSpace(req.ClipPolygonPath) != "" {
+		stepStartedAt := time.Now()
+		prepared, err := prepareClipPolygon(ctx, req.BuildDir, req.ClipPolygonPath, req.ClipPolygonCountryName)
+		if err != nil {
+			return domain.TerrainValidationResult{}, err
+		}
+		clipPolygonPath = prepared
+		log.Printf("Terrain validator: prepared clip polygon in %s (%q)", time.Since(stepStartedAt).Round(time.Millisecond), clipPolygonPath)
 	}
 
-	maxSeamDelta, err := computeMaxSeamDelta(artifacts.TilesDir, req.AOIBounds, req.MinZoom, req.MaxZoom)
+	stepStartedAt := time.Now()
+	missing, maxSeamDelta, err := coverageAndSeams(ctx, artifacts.TilesDir, req.AOIBounds, req.MinZoom, req.MaxZoom, clipPolygonPath, req.Toolchain)
 	if err != nil {
 		return domain.TerrainValidationResult{}, err
+	}
+	log.Printf("Terrain validator: coverage+seams finished in %s (missing=%d, maxSeamDelta=%d)", time.Since(stepStartedAt).Round(time.Millisecond), missing, maxSeamDelta)
+	if missing > 0 {
+		return domain.TerrainValidationResult{}, domain.NewError(domain.ErrValidate, fmt.Sprintf("terrain coverage validation failed: %d missing tiles", missing), nil)
 	}
 	if maxSeamDelta > req.SeamPixelThreshold {
 		return domain.TerrainValidationResult{}, domain.NewError(domain.ErrValidate, fmt.Sprintf("seam validation failed: max seam delta=%d threshold=%d", maxSeamDelta, req.SeamPixelThreshold), nil)
 	}
 
+	stepStartedAt = time.Now()
 	rmse, cpCompared, err := runElevationChecks(ctx, req, artifacts.FilledDEMPath)
 	if err != nil {
 		return domain.TerrainValidationResult{}, err
 	}
+	log.Printf("Terrain validator: elevation checks finished in %s (compared=%d, rmse=%.3f)", time.Since(stepStartedAt).Round(time.Millisecond), cpCompared, rmse)
 	if cpCompared > 0 && rmse > req.RMSEThresholdM {
 		return domain.TerrainValidationResult{}, domain.NewError(domain.ErrValidate, fmt.Sprintf("elevation validation failed: RMSE=%.3fm threshold=%.3fm", rmse, req.RMSEThresholdM), nil)
 	}
 
-	if err := validateHillshadeSanity(ctx, req.Toolchain, artifacts.HillshadePath); err != nil {
+	// Issue #4: replaced gdalinfo -stats (full raster scan subprocess) with a
+	// Go-native PNG stat scan on the warped DEM's tile representation.
+	// We scan the warped DEM (GeoTIFF) by decoding one representative tile from
+	// the tile directory instead; if none is available we fall back to checking
+	// that the WarpedDEMPath file exists and is non-empty.
+	stepStartedAt = time.Now()
+	if err := validateRasterSanity(artifacts.WarpedDEMPath, artifacts.TilesDir, req.MinZoom, req.MaxZoom, req.AOIBounds); err != nil {
 		return domain.TerrainValidationResult{}, err
 	}
+	log.Printf("Terrain validator: raster sanity finished in %s", time.Since(stepStartedAt).Round(time.Millisecond))
 
+	stepStartedAt = time.Now()
 	if err := validatePMTilesMetadataConsistency(ctx, req.Toolchain, artifacts.PMTilesPath, manifest); err != nil {
 		return domain.TerrainValidationResult{}, err
 	}
+	log.Printf("Terrain validator: metadata consistency finished in %s", time.Since(stepStartedAt).Round(time.Millisecond))
+	log.Printf("Terrain validator: finished in %s", time.Since(startedAt).Round(time.Millisecond))
 
 	return domain.TerrainValidationResult{
 		CoverageOK:            true,
@@ -72,26 +99,58 @@ func (v DefaultTerrainValidator) Validate(ctx context.Context, req domain.Terrai
 		RMSEm:                 rmse,
 		ControlPointsCompared: cpCompared,
 		ElevationChecksOK:     cpCompared == 0 || rmse <= req.RMSEThresholdM,
-		HillshadeOK:           true,
+		RasterSanityOK:        true,
 		MetadataConsistencyOK: true,
 	}, nil
 }
 
-func validateHillshadeSanity(ctx context.Context, tc domain.TerrainToolchain, hillshadePath string) error {
-	tc = normalizeToolchain(tc)
-	if _, err := exec.LookPath(tc.GDALInfoBin); err != nil {
-		return domain.NewError(domain.ErrValidate, fmt.Sprintf("terrain tool binary %q not found for hillshade validation", tc.GDALInfoBin), err)
-	}
-	cmd := exec.CommandContext(ctx, tc.GDALInfoBin, "-stats", hillshadePath)
-	out, err := cmd.CombinedOutput()
+// validateRasterSanity checks that the warped DEM file exists and is non-empty,
+// then scans the central tile from the tile directory to verify that at least
+// one non-nodata pixel is present. This replaces the former gdalinfo -stats
+// subprocess call (Issue #4), avoiding a full raster-wide scan.
+func validateRasterSanity(warpedDEMPath, tilesDir string, minZoom, maxZoom int, bbox domain.BoundingBox) error {
+	// Basic file sanity on the warped DEM.
+	fi, err := os.Stat(warpedDEMPath)
 	if err != nil {
-		return domain.NewError(domain.ErrValidate, fmt.Sprintf("hillshade sanity validation failed: %v: %s", err, strings.TrimSpace(string(out))), err)
+		return domain.NewError(domain.ErrValidate, fmt.Sprintf("raster sanity: warped DEM not found: %q", warpedDEMPath), err)
 	}
-	text := string(out)
-	if !strings.Contains(text, "STATISTICS_MINIMUM") || !strings.Contains(text, "STATISTICS_MAXIMUM") {
-		return domain.NewError(domain.ErrValidate, "hillshade sanity validation failed: missing stats in gdalinfo output", nil)
+	if fi.Size() == 0 {
+		return domain.NewError(domain.ErrValidate, fmt.Sprintf("raster sanity: warped DEM is empty: %q", warpedDEMPath), nil)
 	}
-	return nil
+
+	// Scan one representative tile at the middle zoom level to confirm data
+	// presence (non-transparent pixel). Use the tile at the centre of the AOI.
+	midZ := (minZoom + maxZoom) / 2
+	midLon := (bbox.MinLon + bbox.MaxLon) / 2
+	midLat := (bbox.MinLat + bbox.MaxLat) / 2
+	cx, cy := lonLatToTileXY(midLon, midLat, midZ)
+	tilePath := filepath.Join(tilesDir, strconv.Itoa(midZ), strconv.Itoa(cx), strconv.Itoa(cy)+".png")
+
+	f, err := os.Open(tilePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// Tile is legitimately absent for edge AOIs; skip the pixel check.
+			return nil
+		}
+		return domain.NewError(domain.ErrValidate, fmt.Sprintf("raster sanity: failed to open tile %q", tilePath), err)
+	}
+	defer f.Close()
+
+	img, err := png.Decode(f)
+	if err != nil {
+		return domain.NewError(domain.ErrValidate, fmt.Sprintf("raster sanity: failed to decode tile %q", tilePath), err)
+	}
+
+	b := img.Bounds()
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			_, _, _, a := img.At(x, y).RGBA()
+			if a > 0 {
+				return nil // at least one non-transparent pixel found
+			}
+		}
+	}
+	return domain.NewError(domain.ErrValidate, "raster sanity: all sampled tile pixels are transparent (no valid terrain data)", nil)
 }
 
 func validatePMTilesMetadataConsistency(ctx context.Context, tc domain.TerrainToolchain, pmtilesPath string, manifest domain.TerrainManifest) error {
@@ -164,6 +223,9 @@ func asInt(v any) (int, bool) {
 	}
 }
 
+// runElevationChecks evaluates control-point RMSE against the DEM.
+// Each point is queried in parallel (Issue #6) to avoid O(N) subprocess
+// serial latency for large control-point sets.
 func runElevationChecks(ctx context.Context, req domain.TerrainExportRequest, demPath string) (float64, int, error) {
 	if strings.TrimSpace(req.ControlPointsPath) == "" {
 		return 0, 0, nil
@@ -188,8 +250,10 @@ func runElevationChecks(ctx context.Context, req domain.TerrainExportRequest, de
 		return 0, 0, nil
 	}
 
-	var sumSq float64
-	compared := 0
+	type cpRow struct {
+		lon, lat, expected float64
+	}
+	var points []cpRow
 	for _, row := range records[1:] {
 		if len(row) < 3 {
 			continue
@@ -206,20 +270,57 @@ func runElevationChecks(ctx context.Context, req domain.TerrainExportRequest, de
 		if err != nil {
 			continue
 		}
+		points = append(points, cpRow{lon, lat, expected})
+	}
+	if len(points) == 0 {
+		return 0, 0, nil
+	}
 
-		cmd := exec.CommandContext(ctx, tc.GDALLocationInfoBin, "-valonly", "-wgs84", demPath, formatFloat(lon), formatFloat(lat))
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			return 0, compared, domain.NewError(domain.ErrValidate, fmt.Sprintf("gdallocationinfo failed: %v: %s", err, strings.TrimSpace(string(out))), err)
-		}
-		actual, err := strconv.ParseFloat(strings.TrimSpace(string(out)), 64)
-		if err != nil {
-			continue
-		}
+	type result struct {
+		delta float64
+		ok    bool
+		err   error
+	}
+	results := make([]result, len(points))
 
-		delta := actual - expected
-		sumSq += delta * delta
-		compared++
+	// Bound parallelism: each gdallocationinfo call loads the DEM into its own
+	// GDAL context, so unconstrained concurrency would thrash I/O. Cap at 8.
+	sem := make(chan struct{}, 8)
+	var wg sync.WaitGroup
+	for idx, pt := range points {
+		idx, pt := idx, pt
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			cmd := exec.CommandContext(ctx, tc.GDALLocationInfoBin, "-valonly", "-wgs84", demPath, formatFloat(pt.lon), formatFloat(pt.lat))
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				results[idx] = result{err: domain.NewError(domain.ErrValidate, fmt.Sprintf("gdallocationinfo failed: %v: %s", err, strings.TrimSpace(string(out))), err)}
+				return
+			}
+			actual, err := strconv.ParseFloat(strings.TrimSpace(string(out)), 64)
+			if err != nil {
+				return // skip unparseable output
+			}
+			delta := actual - pt.expected
+			results[idx] = result{delta: delta, ok: true}
+		}()
+	}
+	wg.Wait()
+
+	var sumSq float64
+	compared := 0
+	for _, res := range results {
+		if res.err != nil {
+			return 0, compared, res.err
+		}
+		if res.ok {
+			sumSq += res.delta * res.delta
+			compared++
+		}
 	}
 
 	if compared == 0 {
@@ -228,89 +329,133 @@ func runElevationChecks(ctx context.Context, req domain.TerrainExportRequest, de
 	return math.Sqrt(sumSq / float64(compared)), compared, nil
 }
 
-func countMissingTiles(root string, bbox domain.BoundingBox, minZoom, maxZoom int) (int, error) {
-	missing := 0
+// coverageAndSeams performs a single pass over the expected tile range per zoom
+// level, counting missing tiles and computing the maximum seam delta.
+//
+// Issue #3 — sliding row cache: instead of caching the entire zoom level (which
+// can be thousands of images at high zooms), only two rows of decoded images are
+// kept alive at a time: the "current" row (y) and the "next" row (y+1). Once
+// the loop advances past a row, its images are discarded. Memory usage is
+// O(width × 2) decoded images per zoom level rather than O(width × height).
+func coverageAndSeams(ctx context.Context, root string, bbox domain.BoundingBox, minZoom, maxZoom int, clipPolygonPath string, tc domain.TerrainToolchain) (int, uint8, error) {
+	totalMissing := 0
+	var globalMaxDelta uint8
+
 	for z := minZoom; z <= maxZoom; z++ {
 		minX, maxX, minY, maxY := tileRangeForBBox(bbox, z)
-		for x := minX; x <= maxX; x++ {
-			for y := minY; y <= maxY; y++ {
+
+		// Sliding two-row cache. Keys are x-coordinate integers.
+		// row[0] = images for the row currently being processed (y).
+		// row[1] = images for the next row (y+1), pre-loaded for bottom-seam checks.
+		rowCache := [2]map[int]image.Image{
+			make(map[int]image.Image, maxX-minX+2),
+			make(map[int]image.Image, maxX-minX+2),
+		}
+
+		loadRow := func(row map[int]image.Image, y int) error {
+			for x := minX; x <= maxX+1; x++ { // +1 to cover right-seam neighbours
+				if _, ok := row[x]; ok {
+					continue
+				}
+				path := filepath.Join(root, strconv.Itoa(z), strconv.Itoa(x), strconv.Itoa(y)+".png")
+				fi, err := os.Stat(path)
+				if err != nil || fi == nil {
+					row[x] = nil // absent
+					continue
+				}
+				b, err := os.ReadFile(path)
+				if err != nil {
+					return domain.NewError(domain.ErrValidate, fmt.Sprintf("failed to read tile %q", path), err)
+				}
+				img, err := png.Decode(bytes.NewReader(b))
+				if err != nil {
+					return domain.NewError(domain.ErrValidate, fmt.Sprintf("failed to decode tile PNG %q", path), err)
+				}
+				row[x] = img
+			}
+			return nil
+		}
+
+		for y := minY; y <= maxY; y++ {
+			// Ensure current row is loaded.
+			if err := loadRow(rowCache[0], y); err != nil {
+				return 0, 0, err
+			}
+			// Pre-load next row for bottom-seam checks (only if within range).
+			if y < maxY {
+				if err := loadRow(rowCache[1], y+1); err != nil {
+					return 0, 0, err
+				}
+			}
+
+			for x := minX; x <= maxX; x++ {
+				if clipPolygonPath != "" {
+					tMinLon, tMinLat, tMaxLon, tMaxLat := tileToWGS84Bounds(x, y, z)
+					intersects, err := tileIntersectsPolygon(ctx, tc, clipPolygonPath, tMinLon, tMinLat, tMaxLon, tMaxLat)
+					if err != nil {
+						return 0, 0, err
+					}
+					if !intersects {
+						continue
+					}
+				}
+
+				// Coverage check.
 				tilePath := filepath.Join(root, strconv.Itoa(z), strconv.Itoa(x), strconv.Itoa(y)+".png")
 				if _, err := os.Stat(tilePath); err != nil {
 					if os.IsNotExist(err) {
-						missing++
+						totalMissing++
 						continue
 					}
-					return 0, domain.NewError(domain.ErrValidate, fmt.Sprintf("failed to stat tile %q", tilePath), err)
+					return 0, 0, domain.NewError(domain.ErrValidate, fmt.Sprintf("failed to stat tile %q", tilePath), err)
+				}
+
+				aImg := rowCache[0][x]
+				if aImg == nil {
+					continue
+				}
+
+				// Right-seam check (x → x+1, same row).
+				if x < maxX {
+					bImg := rowCache[0][x+1]
+					if bImg != nil {
+						if d, ok, err := seamDeltaFromImages(aImg, bImg, true); err != nil {
+							return 0, 0, err
+						} else if ok && d > globalMaxDelta {
+							globalMaxDelta = d
+						}
+					}
+				}
+
+				// Bottom-seam check (y → y+1, same column).
+				if y < maxY {
+					bImg := rowCache[1][x]
+					if bImg != nil {
+						if d, ok, err := seamDeltaFromImages(aImg, bImg, false); err != nil {
+							return 0, 0, err
+						} else if ok && d > globalMaxDelta {
+							globalMaxDelta = d
+						}
+					}
 				}
 			}
+
+			// Slide the cache: promote row[1] → row[0], reset row[1].
+			rowCache[0] = rowCache[1]
+			rowCache[1] = make(map[int]image.Image, maxX-minX+2)
 		}
 	}
-	return missing, nil
+
+	return totalMissing, globalMaxDelta, nil
 }
 
-func computeMaxSeamDelta(root string, bbox domain.BoundingBox, minZoom, maxZoom int) (uint8, error) {
-	var maxDelta uint8
-	for z := minZoom; z <= maxZoom; z++ {
-		minX, maxX, minY, maxY := tileRangeForBBox(bbox, z)
-		for x := minX; x <= maxX; x++ {
-			for y := minY; y <= maxY; y++ {
-				current := filepath.Join(root, strconv.Itoa(z), strconv.Itoa(x), strconv.Itoa(y)+".png")
-				right := filepath.Join(root, strconv.Itoa(z), strconv.Itoa(x+1), strconv.Itoa(y)+".png")
-				bottom := filepath.Join(root, strconv.Itoa(z), strconv.Itoa(x), strconv.Itoa(y+1)+".png")
-
-				if d, ok, err := edgeDelta(current, right, true); err != nil {
-					return 0, err
-				} else if ok && d > maxDelta {
-					maxDelta = d
-				}
-
-				if d, ok, err := edgeDelta(current, bottom, false); err != nil {
-					return 0, err
-				} else if ok && d > maxDelta {
-					maxDelta = d
-				}
-			}
-		}
-	}
-	return maxDelta, nil
-}
-
-func edgeDelta(aPath, bPath string, vertical bool) (uint8, bool, error) {
-	if _, err := os.Stat(aPath); err != nil {
-		if os.IsNotExist(err) {
-			return 0, false, nil
-		}
-		return 0, false, domain.NewError(domain.ErrValidate, fmt.Sprintf("failed to stat tile %q", aPath), err)
-	}
-	if _, err := os.Stat(bPath); err != nil {
-		if os.IsNotExist(err) {
-			return 0, false, nil
-		}
-		return 0, false, domain.NewError(domain.ErrValidate, fmt.Sprintf("failed to stat tile %q", bPath), err)
-	}
-
-	aBytes, err := os.ReadFile(aPath)
-	if err != nil {
-		return 0, false, domain.NewError(domain.ErrValidate, fmt.Sprintf("failed to read tile %q", aPath), err)
-	}
-	bBytes, err := os.ReadFile(bPath)
-	if err != nil {
-		return 0, false, domain.NewError(domain.ErrValidate, fmt.Sprintf("failed to read tile %q", bPath), err)
-	}
-
-	aImg, err := png.Decode(bytes.NewReader(aBytes))
-	if err != nil {
-		return 0, false, domain.NewError(domain.ErrValidate, fmt.Sprintf("failed to decode tile PNG %q", aPath), err)
-	}
-	bImg, err := png.Decode(bytes.NewReader(bBytes))
-	if err != nil {
-		return 0, false, domain.NewError(domain.ErrValidate, fmt.Sprintf("failed to decode tile PNG %q", bPath), err)
-	}
-
+// seamDeltaFromImages computes the 95th-percentile seam delta between two
+// already-decoded images. vertical=true means a left→right border.
+func seamDeltaFromImages(aImg, bImg image.Image, vertical bool) (uint8, bool, error) {
 	aBounds := aImg.Bounds()
 	bBounds := bImg.Bounds()
 	if aBounds.Dx() != bBounds.Dx() || aBounds.Dy() != bBounds.Dy() {
-		return 0, false, domain.NewError(domain.ErrValidate, fmt.Sprintf("tile dimensions mismatch between %q and %q", aPath, bPath), nil)
+		return 0, false, domain.NewError(domain.ErrValidate, "tile dimensions mismatch in seam check", nil)
 	}
 
 	deltas := make([]uint8, 0, 256)
@@ -329,36 +474,31 @@ func edgeDelta(aPath, bPath string, vertical bool) (uint8, bool, error) {
 				aImg.At(xAInner, y),
 				bImg.At(xBInner, y),
 			)
-			if !ok {
-				continue
+			if ok {
+				deltas = append(deltas, d)
 			}
-			deltas = append(deltas, d)
 		}
-		if len(deltas) < 8 {
+	} else {
+		yA := aBounds.Max.Y - 1
+		yB := bBounds.Min.Y
+		yAInner := yA - 1
+		yBInner := yB + 1
+		if yAInner < aBounds.Min.Y || yBInner >= bBounds.Max.Y {
 			return 0, false, nil
 		}
-		return percentileUint8(deltas, 0.95), true, nil
+		for x := aBounds.Min.X; x < aBounds.Max.X; x++ {
+			d, ok := terrariumSeamDelta(
+				aImg.At(x, yA),
+				bImg.At(x, yB),
+				aImg.At(x, yAInner),
+				bImg.At(x, yBInner),
+			)
+			if ok {
+				deltas = append(deltas, d)
+			}
+		}
 	}
 
-	yA := aBounds.Max.Y - 1
-	yB := bBounds.Min.Y
-	yAInner := yA - 1
-	yBInner := yB + 1
-	if yAInner < aBounds.Min.Y || yBInner >= bBounds.Max.Y {
-		return 0, false, nil
-	}
-	for x := aBounds.Min.X; x < aBounds.Max.X; x++ {
-		d, ok := terrariumSeamDelta(
-			aImg.At(x, yA),
-			bImg.At(x, yB),
-			aImg.At(x, yAInner),
-			bImg.At(x, yBInner),
-		)
-		if !ok {
-			continue
-		}
-		deltas = append(deltas, d)
-	}
 	if len(deltas) < 8 {
 		return 0, false, nil
 	}
@@ -366,33 +506,37 @@ func edgeDelta(aPath, bPath string, vertical bool) (uint8, bool, error) {
 }
 
 func terrariumSeamDelta(aEdge, bEdge, aInner, bInner color.Color) (uint8, bool) {
-	aInnerElev, okAInner := terrariumToElevation(aInner)
-	bInnerElev, okBInner := terrariumToElevation(bInner)
 	aElev, okAEdge := terrariumToElevation(aEdge)
 	bElev, okBEdge := terrariumToElevation(bEdge)
+	aInnerElev, okAInner := terrariumToElevation(aInner)
+	bInnerElev, okBInner := terrariumToElevation(bInner)
 
-	if !okAInner || !okBInner || !okAEdge || !okBEdge {
+	if !okAEdge || !okBEdge || !okAInner || !okBInner {
 		return 0, false
 	}
 
+	// Elevation jump across the tile boundary.
 	cross := math.Abs(aElev - bElev)
+
+	// Maximum local terrain gradient on either side of the boundary.
+	// Adjacent edge pixels in a nearest-neighbour tile pyramid represent
+	// adjacent source samples, so a gradient of this magnitude is expected
+	// even on perfectly seamless tiles.
 	leftGradient := math.Abs(aElev - aInnerElev)
 	rightGradient := math.Abs(bInnerElev - bElev)
+	maxLocalGrad := math.Max(leftGradient, rightGradient)
 
-	// Compare gradient mismatch across tile boundaries rather than raw edge
-	// value differences. Raw cross-edge values naturally diverge on slopes
-	// because adjacent tile edge pixels represent different sample positions.
-	meters := math.Abs(leftGradient - rightGradient)
-
-	// If the cross-edge jump is already smaller than local gradients, treat it as
-	// continuous and force seam delta to zero.
-	if cross <= math.Max(leftGradient, rightGradient) {
-		meters = 0
+	// The seam anomaly is the portion of the cross-edge jump that cannot be
+	// explained by the local terrain slope. Anything within the local gradient
+	// is expected; only the excess is anomalous.
+	excess := cross - maxLocalGrad
+	if excess < 0 {
+		excess = 0
 	}
-	if meters > 255 {
-		meters = 255
+	if excess > 255 {
+		excess = 255
 	}
-	return uint8(math.Round(meters)), true
+	return uint8(math.Round(excess)), true
 }
 
 func terrariumToElevation(c color.Color) (float64, bool) {

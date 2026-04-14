@@ -160,3 +160,85 @@ func TestAppRunConfigFiltersAirspacesByMaxAltitudeFL(t *testing.T) {
 		t.Fatalf("expected FL100 airspace to be filtered out, got %q", xml)
 	}
 }
+
+func TestAppRunConfigOnlyProvidesRequiredPaths(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	inputPath := filepath.Join(tmpDir, "input.ofmx")
+	outputPath := filepath.Join(tmpDir, "output.xml")
+	configPath := filepath.Join(tmpDir, "parser.yaml")
+
+	if err := os.WriteFile(inputPath, []byte(sampleConfigDrivenOFMXInput()), 0o600); err != nil {
+		t.Fatalf("write input fixture: %v", err)
+	}
+
+	configBody := "ofmx:\n" +
+		"  input: " + inputPath + "\n" +
+		"xml:\n" +
+		"  output: " + outputPath + "\n"
+	if err := os.WriteFile(configPath, []byte(configBody), 0o600); err != nil {
+		t.Fatalf("write config fixture: %v", err)
+	}
+
+	if err := app.Run(context.Background(), []string{"--config", configPath}); err != nil {
+		t.Fatalf("app run failed: %v", err)
+	}
+
+	if _, err := os.Stat(outputPath); err != nil {
+		t.Fatalf("expected output from config-only run: %v", err)
+	}
+}
+
+func TestAppRunCLIOverridesConfigOutputPath(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	inputPath := filepath.Join(tmpDir, "input.ofmx")
+	configOutputPath := filepath.Join(tmpDir, "config-output.xml")
+	overrideOutputPath := filepath.Join(tmpDir, "override-output.xml")
+	configPath := filepath.Join(tmpDir, "parser.yaml")
+
+	if err := os.WriteFile(inputPath, []byte(sampleConfigDrivenOFMXInput()), 0o600); err != nil {
+		t.Fatalf("write input fixture: %v", err)
+	}
+
+	configBody := "ofmx:\n" +
+		"  input: " + inputPath + "\n" +
+		"xml:\n" +
+		"  output: " + configOutputPath + "\n"
+	if err := os.WriteFile(configPath, []byte(configBody), 0o600); err != nil {
+		t.Fatalf("write config fixture: %v", err)
+	}
+
+	if err := app.Run(context.Background(), []string{"--config", configPath, "--output", overrideOutputPath}); err != nil {
+		t.Fatalf("app run failed: %v", err)
+	}
+
+	if _, err := os.Stat(overrideOutputPath); err != nil {
+		t.Fatalf("expected overridden output path to be written: %v", err)
+	}
+	if _, err := os.Stat(configOutputPath); err == nil {
+		t.Fatalf("expected config output path to be ignored when --output is set")
+	}
+}
+
+func sampleConfigDrivenOFMXInput() string {
+	return `<?xml version="1.0" encoding="UTF-8"?>
+<OFMX-Snapshot version="0.1.0" origin="unit-test" namespace="123e4567-e89b-12d3-a456-426614174000" created="2026-01-01T00:00:00Z" effective="2026-01-01T00:00:00Z">
+  <Ase>
+    <AseUid><codeType>CTR</codeType><codeId>LKCTR1</codeId></AseUid>
+    <txtName>CTR Zone</txtName>
+    <codeDistVerLower>SFC</codeDistVerLower>
+    <valDistVerLower>0</valDistVerLower>
+    <codeDistVerUpper>MSL</codeDistVerUpper>
+    <valDistVerUpper>1000</valDistVerUpper>
+  </Ase>
+  <Abd>
+    <AbdUid><AseUid><codeType>CTR</codeType><codeId>LKCTR1</codeId></AseUid></AbdUid>
+    <Avx><codeType>GRC</codeType><geoLat>49.000000N</geoLat><geoLong>014.000000E</geoLong><codeDatum>WGE</codeDatum></Avx>
+    <Avx><codeType>GRC</codeType><geoLat>49.100000N</geoLat><geoLong>014.200000E</geoLong><codeDatum>WGE</codeDatum></Avx>
+    <Avx><codeType>GRC</codeType><geoLat>48.900000N</geoLat><geoLong>014.300000E</geoLong><codeDatum>WGE</codeDatum></Avx>
+  </Abd>
+</OFMX-Snapshot>`
+}
