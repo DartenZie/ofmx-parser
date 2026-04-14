@@ -142,20 +142,6 @@ func runWithReader(ctx context.Context, cfg config.CLIConfig, fileCfg config.Fil
 		pmtilesStartedAt := time.Now()
 		log.Printf("Writing PMTiles output to %q", cfg.PMTilesOutputPath)
 
-		// When terrain clipping is auto-wired from map artifacts and the user did
-		// not provide an explicit map temp dir, create one here so the map service
-		// does not auto-delete it before terrain runs.
-		if terrainRequested && cfg.TerrainClipPolygonPath == "" && cfg.MapTempDir == "" {
-			tmpDir, err := os.MkdirTemp("", "ofmx-map-artifacts-")
-			if err != nil {
-				return domain.NewError(domain.ErrOutput, "failed to create temporary map artifacts directory", err)
-			}
-			cfg.MapTempDir = tmpDir
-			defer func() {
-				_ = os.RemoveAll(tmpDir)
-			}()
-		}
-
 		mapReq := domain.MapExportRequest{
 			PBFInputPath:      cfg.PBFInputPath,
 			PMTilesOutputPath: cfg.PMTilesOutputPath,
@@ -171,27 +157,11 @@ func runWithReader(ctx context.Context, cfg config.CLIConfig, fileCfg config.Fil
 			output.GeoJSONFileWriter{},
 			output.ExecTilemakerRunner{},
 		)
-		mapArtifacts, err := mapSvc.Execute(ctx, doc, mapReq)
+		_, err = mapSvc.Execute(ctx, doc, mapReq)
 		if err != nil {
 			return err
 		}
 		log.Printf("Writing PMTiles output finished in %s", time.Since(pmtilesStartedAt).Round(time.Millisecond))
-
-		// Auto-wire the country boundary GeoJSON produced by the map pipeline as
-		// the terrain clip polygon when terrain is also requested and the user has
-		// not supplied an explicit --terrain-clip-polygon path. The file contains
-		// LineString border segments; prepareClipPolygon in terrain_runner.go will
-		// convert it to a convex-hull polygon automatically.
-		if terrainRequested && cfg.TerrainClipPolygonPath == "" && mapArtifacts.CountriesBoundaryPath != "" {
-			cfg.TerrainClipPolygonPath = mapArtifacts.CountriesBoundaryPath
-			// Default to CZECHREPUBLIC filter when not explicitly overridden, so
-			// only the CZ border segments contribute to the clip hull.
-			if cfg.TerrainClipPolygonCountryName == "" {
-				cfg.TerrainClipPolygonCountryName = "CZECHREPUBLIC"
-			}
-			log.Printf("Auto-wiring terrain clip polygon from map pipeline: %q (country filter: %q)",
-				cfg.TerrainClipPolygonPath, cfg.TerrainClipPolygonCountryName)
-		}
 	}
 
 	if terrainRequested {

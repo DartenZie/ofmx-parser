@@ -13,6 +13,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"log"
 	"math"
 	"os"
 	"os/exec"
@@ -21,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/DartenZie/ofmx-parser/internal/domain"
 )
@@ -34,19 +36,26 @@ type TerrainValidator interface {
 type DefaultTerrainValidator struct{}
 
 func (v DefaultTerrainValidator) Validate(ctx context.Context, req domain.TerrainExportRequest, artifacts domain.TerrainBuildArtifacts, manifest domain.TerrainManifest) (domain.TerrainValidationResult, error) {
+	startedAt := time.Now()
+	log.Printf("Terrain validator: start")
+
 	clipPolygonPath := ""
 	if strings.TrimSpace(req.ClipPolygonPath) != "" {
+		stepStartedAt := time.Now()
 		prepared, err := prepareClipPolygon(ctx, req.BuildDir, req.ClipPolygonPath, req.ClipPolygonCountryName)
 		if err != nil {
 			return domain.TerrainValidationResult{}, err
 		}
 		clipPolygonPath = prepared
+		log.Printf("Terrain validator: prepared clip polygon in %s (%q)", time.Since(stepStartedAt).Round(time.Millisecond), clipPolygonPath)
 	}
 
+	stepStartedAt := time.Now()
 	missing, maxSeamDelta, err := coverageAndSeams(ctx, artifacts.TilesDir, req.AOIBounds, req.MinZoom, req.MaxZoom, clipPolygonPath, req.Toolchain)
 	if err != nil {
 		return domain.TerrainValidationResult{}, err
 	}
+	log.Printf("Terrain validator: coverage+seams finished in %s (missing=%d, maxSeamDelta=%d)", time.Since(stepStartedAt).Round(time.Millisecond), missing, maxSeamDelta)
 	if missing > 0 {
 		return domain.TerrainValidationResult{}, domain.NewError(domain.ErrValidate, fmt.Sprintf("terrain coverage validation failed: %d missing tiles", missing), nil)
 	}
@@ -54,10 +63,12 @@ func (v DefaultTerrainValidator) Validate(ctx context.Context, req domain.Terrai
 		return domain.TerrainValidationResult{}, domain.NewError(domain.ErrValidate, fmt.Sprintf("seam validation failed: max seam delta=%d threshold=%d", maxSeamDelta, req.SeamPixelThreshold), nil)
 	}
 
+	stepStartedAt = time.Now()
 	rmse, cpCompared, err := runElevationChecks(ctx, req, artifacts.FilledDEMPath)
 	if err != nil {
 		return domain.TerrainValidationResult{}, err
 	}
+	log.Printf("Terrain validator: elevation checks finished in %s (compared=%d, rmse=%.3f)", time.Since(stepStartedAt).Round(time.Millisecond), cpCompared, rmse)
 	if cpCompared > 0 && rmse > req.RMSEThresholdM {
 		return domain.TerrainValidationResult{}, domain.NewError(domain.ErrValidate, fmt.Sprintf("elevation validation failed: RMSE=%.3fm threshold=%.3fm", rmse, req.RMSEThresholdM), nil)
 	}
@@ -67,13 +78,18 @@ func (v DefaultTerrainValidator) Validate(ctx context.Context, req domain.Terrai
 	// We scan the warped DEM (GeoTIFF) by decoding one representative tile from
 	// the tile directory instead; if none is available we fall back to checking
 	// that the WarpedDEMPath file exists and is non-empty.
+	stepStartedAt = time.Now()
 	if err := validateRasterSanity(artifacts.WarpedDEMPath, artifacts.TilesDir, req.MinZoom, req.MaxZoom, req.AOIBounds); err != nil {
 		return domain.TerrainValidationResult{}, err
 	}
+	log.Printf("Terrain validator: raster sanity finished in %s", time.Since(stepStartedAt).Round(time.Millisecond))
 
+	stepStartedAt = time.Now()
 	if err := validatePMTilesMetadataConsistency(ctx, req.Toolchain, artifacts.PMTilesPath, manifest); err != nil {
 		return domain.TerrainValidationResult{}, err
 	}
+	log.Printf("Terrain validator: metadata consistency finished in %s", time.Since(stepStartedAt).Round(time.Millisecond))
+	log.Printf("Terrain validator: finished in %s", time.Since(startedAt).Round(time.Millisecond))
 
 	return domain.TerrainValidationResult{
 		CoverageOK:            true,

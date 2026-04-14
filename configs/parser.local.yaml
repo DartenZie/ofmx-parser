@@ -121,7 +121,7 @@ terrain:
 
   # Optional country-name filter used when clip_polygon points at a border
   # line file that needs to be converted into a polygon first.
-  clip_country_name: "CZECHREPUBLIC"
+  clip_country_name: ""
 
   toolchain:
     # gdalbuildvrt binary path or PATH lookup name.

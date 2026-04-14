@@ -44,7 +44,6 @@ type TerrainExportRequest struct {
 	// LineString border file to a clip polygon. Only features whose "name"
 	// property contains this string (case-sensitive) are included in the convex
 	// hull. When empty, all features in the file are used.
-	// Typical value when auto-wired from the map pipeline: "CZECHREPUBLIC".
 	ClipPolygonCountryName string
 	Toolchain              TerrainToolchain
 }

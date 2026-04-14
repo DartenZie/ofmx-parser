@@ -66,9 +66,8 @@ Optional quality/determinism controls:
    elevation discontinuities at tile edges.
    - Worker count is configurable via `--terrain-gdal2tiles-processes`
      (defaults to all available CPUs).
-9. **(Optional) Polygon tile clipping**: when `--terrain-clip-polygon` is set
-   (or auto-wired from the map pipeline; see below), the clip file is first
-   prepared by `prepareClipPolygon`:
+9. **(Optional) Polygon tile clipping**: when `--terrain-clip-polygon` is set,
+   the clip file is first prepared by `prepareClipPolygon`:
    - If the file already contains Polygon/MultiPolygon geometry it is used as-is.
    - If the file contains LineString geometry (e.g. the `countries_boundary.geojson`
      produced by the map pipeline, which stores border segments as LineStrings),
@@ -83,12 +82,6 @@ Optional quality/determinism controls:
    the polygon using `ogrinfo -al -so -spat`. Tiles whose geographic extent does
    not intersect the polygon are deleted from disk before PMTiles packaging,
    reducing tile count for irregular AOI shapes such as country outlines.
-
-   **Auto-wiring from the map pipeline**: when both `--pmtiles-output` (map) and
-   `--terrain-pmtiles-output` are requested in the same invocation and
-   `--terrain-clip-polygon` is not explicitly set, the `countries_boundary.geojson`
-   produced by the map pipeline is automatically used as the clip source with a
-   default country filter of `CZECHREPUBLIC`.
 10. **Direct PMTiles v3 packaging**: a pure-Go writer walks the tile directory,
     sorts tiles by Hilbert tile ID, deduplicates identical blobs using FNV-1a
     128-bit, and writes the PMTiles v3 archive directly. No MBTiles intermediate
