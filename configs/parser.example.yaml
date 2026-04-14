@@ -17,6 +17,10 @@ xml:
   # Optional parse report JSON output path.
   report: ""
 
+bundle:
+  # Output .ofpkg bundle path. Leave empty to disable bundle export.
+  output: ""
+
 map:
   # OSM PBF input used by tilemaker.
   pbf_input: ""

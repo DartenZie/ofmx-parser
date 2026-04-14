@@ -323,6 +323,7 @@ func ParseBoundingBox(raw string) (domain.BoundingBox, error) {
 type FileConfig struct {
 	OFMX      OFMXFileConfig    `yaml:"ofmx" json:"ofmx"`
 	XML       XMLFileConfig     `yaml:"xml" json:"xml"`
+	Bundle    BundleFileConfig  `yaml:"bundle" json:"bundle"`
 	Map       MapFileConfig     `yaml:"map" json:"map"`
 	Terrain   TerrainFileConfig `yaml:"terrain" json:"terrain"`
 	Transform TransformConfig   `yaml:"transform" json:"transform"`
@@ -336,6 +337,10 @@ type OFMXFileConfig struct {
 type XMLFileConfig struct {
 	OutputPath *string `yaml:"output" json:"output"`
 	ReportPath *string `yaml:"report" json:"report"`
+}
+
+type BundleFileConfig struct {
+	OutputPath *string `yaml:"output" json:"output"`
 }
 
 type MapFileConfig struct {
@@ -434,6 +439,7 @@ func (c FileConfig) ApplyTo(dst *CLIConfig, explicitFlags map[string]struct{}) {
 
 	applyString(dst, c.XML.OutputPath, explicitFlags, "output", func(cfg *CLIConfig, v string) { cfg.OutputPath = v })
 	applyString(dst, c.XML.ReportPath, explicitFlags, "report", func(cfg *CLIConfig, v string) { cfg.ReportPath = v })
+	applyString(dst, c.Bundle.OutputPath, explicitFlags, "bundle-output", func(cfg *CLIConfig, v string) { cfg.BundleOutputPath = v })
 
 	applyString(dst, c.Map.PBFInputPath, explicitFlags, "pbf-input", func(cfg *CLIConfig, v string) { cfg.PBFInputPath = v })
 	applyString(dst, c.Map.PMTilesOutputPath, explicitFlags, "pmtiles-output", func(cfg *CLIConfig, v string) { cfg.PMTilesOutputPath = v })

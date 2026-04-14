@@ -355,6 +355,8 @@ func TestLoadFileParsesGroupedRuntimeConfig(t *testing.T) {
 xml:
   output: output.xml
   report: report.json
+bundle:
+  output: output.ofpkg
 map:
   pbf_input: base.osm.pbf
   pmtiles_output: map.pmtiles
@@ -424,6 +426,9 @@ transform:
 	if got.Map.Tilemaker.Bin == nil || *got.Map.Tilemaker.Bin != "/opt/bin/tilemaker" {
 		t.Fatalf("unexpected map.tilemaker.bin: %+v", got.Map.Tilemaker.Bin)
 	}
+	if got.Bundle.OutputPath == nil || *got.Bundle.OutputPath != "output.ofpkg" {
+		t.Fatalf("unexpected bundle.output: %+v", got.Bundle.OutputPath)
+	}
 	if got.Terrain.Toolchain.GDAL2TilesBin == nil || *got.Terrain.Toolchain.GDAL2TilesBin != "/opt/bin/gdal2tiles.py" {
 		t.Fatalf("unexpected terrain.toolchain.gdal2tiles_bin: %+v", got.Terrain.Toolchain.GDAL2TilesBin)
 	}
@@ -444,6 +449,7 @@ func TestFileConfigApplyToRespectsExplicitFlags(t *testing.T) {
 
 	parsed, err := ParseArgs([]string{
 		"--output", "cli.xml",
+		"--bundle-output", "cli.ofpkg",
 		"--terrain-gdal2tiles-processes", "8",
 	})
 	if err != nil {
@@ -452,8 +458,9 @@ func TestFileConfigApplyToRespectsExplicitFlags(t *testing.T) {
 
 	cfg := parsed.Config
 	fileCfg := FileConfig{
-		OFMX: OFMXFileConfig{InputPath: strPtr("config.ofmx")},
-		XML:  XMLFileConfig{OutputPath: strPtr("config.xml")},
+		OFMX:   OFMXFileConfig{InputPath: strPtr("config.ofmx")},
+		XML:    XMLFileConfig{OutputPath: strPtr("config.xml")},
+		Bundle: BundleFileConfig{OutputPath: strPtr("config.ofpkg")},
 		Terrain: TerrainFileConfig{
 			Encoding:            strPtr("terrain-rgb"),
 			GDAL2TilesProcesses: intPtr(4),
@@ -470,6 +477,9 @@ func TestFileConfigApplyToRespectsExplicitFlags(t *testing.T) {
 	}
 	if cfg.TerrainEncoding != "terrain-rgb" {
 		t.Fatalf("expected file config to set terrain encoding, got %q", cfg.TerrainEncoding)
+	}
+	if cfg.BundleOutputPath != "cli.ofpkg" {
+		t.Fatalf("expected explicit CLI bundle output to win, got %q", cfg.BundleOutputPath)
 	}
 	if cfg.TerrainGDAL2TilesProcesses != 8 {
 		t.Fatalf("expected explicit CLI gdal2tiles processes to win, got %d", cfg.TerrainGDAL2TilesProcesses)

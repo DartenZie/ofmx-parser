@@ -168,6 +168,7 @@ The file is grouped into these sections:
 
 - `ofmx`: shared OFMX input settings, including `input` and `arc_max_chord_m`.
 - `xml`: XML output settings such as `output` and `report`.
+- `bundle`: single-file bundle settings such as `output` (`.ofpkg`).
 - `map`: PMTiles map settings including `pbf_input`, `pmtiles_output`, `geojson_output_dir`, `temp_dir`, and nested `tilemaker` overrides.
 - `terrain`: Copernicus DEM terrain settings, including output paths, zoom/tile parameters, quality gates, clipping options, and nested `toolchain` binary paths.
 - `transform`: transformation rules such as airspace allowlist filtering and lower-limit thresholding.
