@@ -20,7 +20,7 @@ func passesAirspaceFilters(as domain.OFMXAirspace, allowedTypes map[string]struc
 	if !isAllowedAirspaceType(as.Type, allowedTypes) {
 		return false
 	}
-	return airspaceLowerLimitFL(as) <= float64(maxLowerFL)
+	return airspaceLowerLimitFL(as) < float64(maxLowerFL)
 }
 
 func airspaceLowerLimitFL(as domain.OFMXAirspace) float64 {
